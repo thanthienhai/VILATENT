@@ -1,0 +1,31 @@
+# G1, stage 2, ViLatent-ME at a 4× budget with memory factor f = 8: memory at 32× + BM25 sentences
+# in the rest of the budget (≈ 87.5%), present in the reader input; starts from the 32× stage-1 writer.
+# f ∈ {2, 4, 8} is chosen on dev loss by scripts/select_me.py.
+# The checkpoint is chosen by dev loss (CE + λ·KL) on ViQuAD dev, never on test.
+reader: Qwen/Qwen3.5-2B
+reader_config: configs/readers/qwen3.5-2b.json
+task: qa
+mode: ME
+memory_factor: 8
+train: data/tasks/viquad_train_clean.jsonl
+dev: data/tasks/viquad_dev.jsonl
+teacher_train: data/teacher/qwen3.5-2b/viquad_train.pt
+teacher_dev: data/teacher/qwen3.5-2b/viquad_dev.pt
+init_from: runs/g1_stage1_r32/best.pt
+out_dir: runs/g1_stage2_me_f8_r4
+ratio: 4
+n_layers: 4
+lora_rank: 0
+chunk_tokens: 512
+lambda_kl: 1.0
+lr_adapter: 1.0e-4
+lr_writer: 2.0e-5
+weight_decay: 0.0
+max_grad_norm: 1.0
+warmup_frac: 0.03
+steps: 2000
+effective_batch: 32
+micro_batch: 8
+eval_every: 250
+log_every: 10
+seed: 0

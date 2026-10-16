@@ -1,0 +1,13 @@
+{
+  "reader": "Qwen/Qwen3.5-2B",
+  "system_prompt": null,
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  },
+  "sink_token": "<|endoftext|>",
+  "eos_token": "<|im_end|>",
+  "prompts": {
+    "qa": "<|im_start|>user\nĐọc đoạn văn và trả lời câu hỏi bằng một cụm từ ngắn lấy từ đoạn văn. Chỉ ghi câu trả lời.\n\nĐoạn văn: {context}\n\nCâu hỏi: {question}\n\nTrả lời:<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "continue": "<|im_start|>user\nViết tiếp đoạn văn sau.\n\nĐoạn văn: {context}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+  }
+}

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vilatent"
+version = "0.1.0"
+description = "ViLatent: soft context compression for frozen Vietnamese readers (research code)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "tqdm", "pyyaml"]
+
+[project.optional-dependencies]
+# Writer, reader and training. Qwen3.5 needs a recent transformers (model type qwen3_5).
+model = ["torch>=2.4", "transformers>=5.0", "peft>=0.13"]
+# Gated DeltaNet kernels with backward (Linux + CUDA only); without them transformers falls
+# back to a slow pure-torch implementation.
+kernels = ["flash-linear-attention", "causal-conv1d"]
+# Dataset download (ViQuAD, Wikipedia, BKAINewsCorpus).
+data = ["datasets>=2.19"]
+# LLMLingua-2 baseline.
+baselines = ["llmlingua>=0.2.2"]
+# Teacher LLM (iCOMM 27B) through an OpenAI-compatible API, for auto-generated QA.
+teacher = ["openai>=1.30"]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["vilatent"]
