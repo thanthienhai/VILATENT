@@ -7,6 +7,8 @@ băng đọc các vector này qua `inputs_embeds`.
 - [`docs/VILATENT.md`](docs/VILATENT.md): đề xuất nghiên cứu (giả thuyết H1–H5, kiến trúc W0, cổng G0–G3). Các chú
   thích "docs/VILATENT.md §…" trong mã trỏ tới tài liệu này.
 - [`docs/RUN_G0_G1.md`](docs/RUN_G0_G1.md): hướng dẫn chạy G0 và G1 trên máy GPU.
+- [`docs/ViLatent_g1.html`](docs/ViLatent_g1.html): sơ đồ huấn luyện và đánh giá G1 (mở bằng trình duyệt; bản lưu
+  của artifact "Sơ đồ huấn luyện ViLatent", ngày 16/10/2026).
 
 > Trạng thái: mã đã sẵn sàng cho **G0 và G1** (Qwen3.5-2B, ViQuAD, 4×), **chưa có kết quả thực nghiệm**. Hệ chính là
 > ViLatent-ME: bộ ghi không thấy câu hỏi (memory ghi một lần) cộng câu gốc chọn theo câu hỏi trong cùng ngân sách,

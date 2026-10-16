@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sơ đồ huấn luyện ViLatent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+html { box-sizing: border-box; }
+body { margin: 0; }
+/* Layout: one technical sheet, narrow reading column; diagrams and tables break out to full width */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --fg: #17212b;
+  --muted: #5a6673;
+  --line: #d3dae2;
+  --frozen-bg: #eaeef3;
+  --train: #0b7566;
+  --train-bg: #def2ee;
+  --ev: #94650a;
+  --ev-bg: #f7ecd2;
+  --grad: #c2410c;
+  --font-body: "Be Vietnam Pro", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1419; --surface: #161d25; --fg: #e2e8ee; --muted: #95a1ae; --line: #2d3843;
+    --frozen-bg: #1c252f; --train: #3cc2ab; --train-bg: #11302b; --ev: #e3b55a; --ev-bg: #33280f;
+    --grad: #f08a4b; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1419; --surface: #161d25; --fg: #e2e8ee; --muted: #95a1ae; --line: #2d3843;
+  --frozen-bg: #1c252f; --train: #3cc2ab; --train-bg: #11302b; --ev: #e3b55a; --ev-bg: #33280f;
+  --grad: #f08a4b; color-scheme: dark;
+}
+
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+main { max-width: 1120px; margin: 0 auto; padding-block: 40px 64px; display: flex; flex-direction: column; gap: 48px; }
+section { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.prose { max-width: 70ch; }
+h1, h2, h3 { margin: 0; text-wrap: balance; line-height: 1.25; }
+h1 { font-size: clamp(26px, 4vw, 36px); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 21px; font-weight: 700; }
+h3 { font-size: 16px; font-weight: 600; }
+p { margin: 0; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.lead { font-size: 17px; }
+.muted { color: var(--muted); }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* diagram */
+figure { margin: 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.scroll svg { display: block; width: 100%; min-width: 860px; height: auto; color: var(--fg); }
+figcaption { font-size: 14px; color: var(--muted); max-width: 84ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 22px; height: 14px; border-radius: 3px; border: 1.5px solid; display: inline-block; }
+.sw.train { background: var(--train-bg); border-color: var(--train); }
+.sw.frozen { background: var(--frozen-bg); border-color: var(--muted); }
+.sw.ev { background: var(--ev-bg); border-color: var(--ev); }
+.sw.line { border: 0; height: 0; border-top: 2px solid var(--fg); border-radius: 0; }
+.sw.grad { border: 0; height: 0; border-top: 2px dashed var(--grad); border-radius: 0; }
+
+/* svg element styling from page tokens */
+.b { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.fz { fill: var(--frozen-bg); stroke: var(--muted); stroke-width: 1.2; }
+.tr { fill: var(--train-bg); stroke: var(--train); stroke-width: 1.4; }
+.ev { fill: var(--ev-bg); stroke: var(--ev); stroke-width: 1.4; }
+.frame { fill: none; stroke: var(--train); stroke-width: 1.6; }
+.tch { fill: var(--surface); stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 4; }
+.fw { fill: none; stroke: var(--fg); stroke-width: 1.4; }
+.fe { fill: none; stroke: var(--ev); stroke-width: 1.6; }
+.gd { fill: none; stroke: var(--grad); stroke-width: 1.6; stroke-dasharray: 6 4; }
+.ah { fill: var(--fg); }
+.ahe { fill: var(--ev); }
+.ahg { fill: var(--grad); }
+.t { fill: var(--fg); font-family: var(--font-body); font-size: 14px; }
+.tb { fill: var(--fg); font-family: var(--font-body); font-size: 14px; font-weight: 700; }
+.s { fill: var(--muted); font-family: var(--font-body); font-size: 12px; }
+.sm { fill: var(--muted); font-family: var(--font-mono); font-size: 12px; }
+.se { fill: var(--ev); font-family: var(--font-body); font-size: 12px; font-weight: 600; }
+.tt { fill: var(--train); font-family: var(--font-body); font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
+.tm { fill: var(--fg); font-family: var(--font-mono); font-size: 15px; font-weight: 500; }
+
+/* tables */
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+td.r, th.r { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+tr.group td { background: var(--bg); font-weight: 600; }
+tr.total td { font-weight: 700; }
+tr.main td:first-child { font-weight: 700; }
+.pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.pill.train { color: var(--train); background: var(--train-bg); }
+.pill.frozen { color: var(--muted); background: var(--frozen-bg); }
+.pill.ev { color: var(--ev); background: var(--ev-bg); }
+
+/* cards */
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 14px; }
+dt { color: var(--muted); }
+dd { margin: 0; min-width: 0; }
+.settings { font-size: 14px; color: var(--muted); }
+
+/* budget bars */
+.bars { display: flex; flex-direction: column; gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; }
+.bar-head, .bar-row { display: grid; grid-template-columns: minmax(150px, 210px) 1fr 92px; gap: 4px 16px; align-items: center; font-size: 14px; }
+.bar-head { font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.bar-head span:last-child, .cov { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.bar-track { display: flex; height: 22px; background: var(--bg); border-radius: 4px; min-width: 0; overflow: hidden; }
+.seg { height: 100%; box-sizing: border-box; border: 1.5px solid; }
+.seg.mem { background: var(--train-bg); border-color: var(--train); }
+.seg.txt { background: var(--frozen-bg); border-color: var(--muted); }
+.seg.ev { background: var(--ev-bg); border-color: var(--ev); }
+.bar-note { font-family: var(--font-mono); font-size: 12px; color: var(--muted); grid-column: 2 / 4; margin-top: -2px; }
+.bar-row.main > span:first-child { font-weight: 700; }
+.bar-sep { border-top: 1px dashed var(--line); }
+@media (max-width: 560px) {
+  .bar-head, .bar-row { grid-template-columns: 1fr 72px; }
+  .bar-head span:nth-child(2) { display: none; }
+  .bar-track { grid-column: 1 / 3; grid-row: 2; }
+  .bar-note { grid-column: 1 / 3; }
+}
+
+.steps { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin: 0; padding: 0; list-style: none; }
+.steps li { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; font-size: 14px; flex: 1 1 170px; min-width: 0; }
+.steps li b { display: block; font-size: 12px; font-family: var(--font-mono); color: var(--muted); font-weight: 500; }
+.fallback { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.fallback div { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; font-size: 14px; }
+.fallback div.keep { border-color: var(--train); }
+.fallback div.back { border-color: var(--grad); }
+.fallback b { display: block; font-size: 12px; font-family: var(--font-mono); font-weight: 500; color: var(--muted); }
+.gate { border: 1.5px solid var(--train); background: var(--train-bg); border-radius: 8px; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; }
+.gate ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.foot { font-size: 13px; color: var(--muted); max-width: 90ch; }
+</style>
+</head>
+<body>
+<main>
+  <header class="prose" style="display:flex;flex-direction:column;gap:12px">
+    <span class="eyebrow">ViLatent · cổng G1 · Qwen3.5-2B · ngân sách 4×</span>
+    <h1>Train phần nào, mô hình lớn bao nhiêu, đọc và đánh giá ra sao</h1>
+    <p class="lead">Chỉ bộ ghi được huấn luyện. Bộ ghi không thấy câu hỏi, nên memory của một đoạn văn được ghi một lần rồi dùng cho mọi câu hỏi. Lúc đọc, câu hỏi chọn thêm các câu gốc đưa kèm memory trong cùng ngân sách; khi reader không chắc, hệ thống đọc lại toàn văn.</p>
+  </header>
+
+  <section>
+    <h2>Luồng huấn luyện của hệ chính ViLatent-ME</h2>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 1120 650" role="img" aria-label="Bộ ghi không thấy câu hỏi nén ngữ cảnh thành memory ở tỉ lệ r nhân f; BM25 chọn câu gốc theo câu hỏi cho phần ngân sách còn lại; reader đóng băng đọc chỉ dẫn, memory, câu gốc, câu hỏi và đáp án; loss CE cộng KL so với thầy là reader đọc toàn văn; gradient đi ngược qua reader về bộ ghi, câu gốc không có gradient.">
+          <defs>
+            <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+            <marker id="ae" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahe"/></marker>
+            <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahg"/></marker>
+          </defs>
+
+          <!-- lane 1: writer (question-blind) -->
+          <rect x="340" y="36" width="520" height="152" rx="10" class="frame"/>
+          <text x="356" y="58" class="tt">BỘ GHI · HUẤN LUYỆN · 233,1 TR THAM SỐ · KHÔNG THẤY CÂU HỎI</text>
+
+          <rect x="20" y="76" width="140" height="94" rx="6" class="b"/>
+          <text x="90" y="106" text-anchor="middle" class="tb">Ngữ cảnh</text>
+          <text x="90" y="128" text-anchor="middle" class="s">n token của reader</text>
+          <text x="90" y="148" text-anchor="middle" class="sm">vd. n = 204, k = 51</text>
+
+          <rect x="184" y="76" width="136" height="94" rx="6" class="b"/>
+          <text x="252" y="106" text-anchor="middle" class="tb">Chia khúc</text>
+          <text x="252" y="128" text-anchor="middle" class="s">≤ 512 token</text>
+          <text x="252" y="148" text-anchor="middle" class="s">cắt ở cuối câu</text>
+
+          <rect x="356" y="76" width="176" height="94" rx="6" class="tr"/>
+          <text x="444" y="100" text-anchor="middle" class="tb">4 lớp đáy của reader</text>
+          <text x="444" y="120" text-anchor="middle" class="s">3× Gated DeltaNet</text>
+          <text x="444" y="138" text-anchor="middle" class="s">1× Gated Attention</text>
+          <text x="444" y="158" text-anchor="middle" class="sm">228,9 tr · lr 2e-5</text>
+
+          <rect x="552" y="76" width="124" height="94" rx="6" class="tr"/>
+          <text x="614" y="106" text-anchor="middle" class="tb">Gộp r·f</text>
+          <text x="614" y="128" text-anchor="middle" class="s">trung bình r·f token</text>
+          <text x="614" y="148" text-anchor="middle" class="sm">vd. f = 2: 8 token</text>
+
+          <rect x="696" y="76" width="148" height="94" rx="6" class="tr"/>
+          <text x="770" y="106" text-anchor="middle" class="tb">RMSNorm·s + W</text>
+          <text x="770" y="128" text-anchor="middle" class="sm">W: 2048 × 2048</text>
+          <text x="770" y="148" text-anchor="middle" class="sm">4,19 tr · lr 1e-4</text>
+
+          <rect x="884" y="76" width="216" height="94" rx="6" class="b"/>
+          <text x="992" y="106" text-anchor="middle" class="tb">Memory M</text>
+          <text x="992" y="128" text-anchor="middle" class="s">kₘ = Σ⌈nᵢ / (r·f)⌉ vector</text>
+          <text x="992" y="148" text-anchor="middle" class="sm">vd. kₘ = 26</text>
+
+          <line x1="160" y1="116" x2="182" y2="116" class="fw" marker-end="url(#a)"/>
+          <line x1="320" y1="116" x2="354" y2="116" class="fw" marker-end="url(#a)"/>
+          <line x1="532" y1="116" x2="550" y2="116" class="fw" marker-end="url(#a)"/>
+          <line x1="676" y1="116" x2="694" y2="116" class="fw" marker-end="url(#a)"/>
+          <line x1="844" y1="110" x2="882" y2="110" class="fw" marker-end="url(#a)"/>
+          <line x1="882" y1="134" x2="846" y2="134" class="gd" marker-end="url(#ag)"/>
+
+          <!-- memory into the reader input -->
+          <polyline points="992,170 992,206 250,206 250,316" class="fw" marker-end="url(#a)"/>
+          <text x="620" y="199" text-anchor="middle" class="s">memory ghi một lần, dùng cho mọi câu hỏi của đoạn</text>
+          <polyline points="262,316 262,218 1004,218 1004,172" class="gd" marker-end="url(#ag)"/>
+
+          <!-- lane 3: reader input and reader -->
+          <rect x="50" y="318" width="100" height="48" class="fz"/>
+          <text x="100" y="347" text-anchor="middle" class="t">Chỉ dẫn</text>
+          <rect x="150" y="318" width="200" height="48" class="tr"/>
+          <text x="250" y="347" text-anchor="middle" class="t">⟨mem⟩ m₁ … mₖ ⟨/mem⟩</text>
+          <rect x="350" y="318" width="150" height="48" class="ev"/>
+          <text x="425" y="347" text-anchor="middle" class="t">câu gốc</text>
+          <rect x="500" y="318" width="120" height="48" class="fz"/>
+          <text x="560" y="347" text-anchor="middle" class="t">Câu hỏi</text>
+          <rect x="620" y="318" width="120" height="48" class="fz"/>
+          <text x="680" y="347" text-anchor="middle" class="t">Đáp án y</text>
+          <text x="50" y="388" class="s">Đầu vào reader</text>
+
+          <rect x="800" y="300" width="300" height="90" rx="6" class="fz"/>
+          <text x="950" y="326" text-anchor="middle" class="tb">READER Qwen3.5-2B · đóng băng</text>
+          <text x="950" y="348" text-anchor="middle" class="s">24 lớp: 18 DeltaNet + 6 Attention · d = 2048</text>
+          <text x="950" y="368" text-anchor="middle" class="s">1,88 tỉ tham số · trọng số không đổi</text>
+
+          <line x1="740" y1="334" x2="798" y2="334" class="fw" marker-end="url(#a)"/>
+          <line x1="798" y1="352" x2="742" y2="352" class="gd" marker-end="url(#ag)"/>
+
+          <!-- lane 4: question-aware sentence choice (no gradient) -->
+          <polyline points="34,170 34,465 328,465" class="fe" marker-end="url(#ae)"/>
+          <text x="46" y="456" class="se">văn bản gốc</text>
+          <rect x="330" y="432" width="280" height="68" rx="6" class="ev"/>
+          <text x="470" y="458" text-anchor="middle" class="tb">Chọn câu gốc theo câu hỏi</text>
+          <text x="470" y="480" text-anchor="middle" class="s">BM25 · k − kₘ token (vd. 25 khi f = 2)</text>
+          <rect x="650" y="432" width="140" height="68" rx="6" class="b"/>
+          <text x="720" y="458" text-anchor="middle" class="tb">Câu hỏi</text>
+          <text x="720" y="480" text-anchor="middle" class="s">văn bản thường</text>
+          <line x1="650" y1="466" x2="612" y2="466" class="fe" marker-end="url(#ae)"/>
+          <line x1="425" y1="432" x2="425" y2="368" class="fe" marker-end="url(#ae)"/>
+          <text x="433" y="404" class="se">nguyên văn</text>
+
+          <!-- lane 5: student output, loss, teacher -->
+          <line x1="950" y1="390" x2="950" y2="538" class="fw" marker-end="url(#a)"/>
+          <text x="940" y="470" text-anchor="end" class="s">logit</text>
+          <line x1="968" y1="538" x2="968" y2="392" class="gd" marker-end="url(#ag)"/>
+
+          <rect x="760" y="540" width="340" height="92" rx="6" class="b"/>
+          <text x="930" y="568" text-anchor="middle" class="tb">Phân phối của trò</text>
+          <text x="930" y="590" text-anchor="middle" class="sm">p(yₜ | M, câu gốc, câu hỏi, y&lt;t)</text>
+          <text x="930" y="612" text-anchor="middle" class="s">chỉ tại các token đáp án</text>
+
+          <rect x="430" y="540" width="270" height="92" rx="6" class="b"/>
+          <text x="565" y="570" text-anchor="middle" class="tm">L = CE + λ·KL</text>
+          <text x="565" y="592" text-anchor="middle" class="s">λ = 1</text>
+          <text x="565" y="612" text-anchor="middle" class="s">KL(thầy ‖ trò): top-20 + ô còn lại</text>
+
+          <line x1="760" y1="576" x2="702" y2="576" class="fw" marker-end="url(#a)"/>
+          <line x1="702" y1="596" x2="758" y2="596" class="gd" marker-end="url(#ag)"/>
+
+          <rect x="20" y="532" width="360" height="108" rx="6" class="tch"/>
+          <text x="200" y="558" text-anchor="middle" class="tb">THẦY · chỉ dùng khi train</text>
+          <text x="200" y="580" text-anchor="middle" class="s">cùng reader, đọc toàn văn + câu hỏi</text>
+          <text x="200" y="600" text-anchor="middle" class="s">tính trước một lần, lưu top-20 log-prob</text>
+          <text x="200" y="620" text-anchor="middle" class="s">trên từng token đáp án · không có gradient</text>
+          <line x1="380" y1="586" x2="428" y2="586" class="fw" marker-end="url(#a)"/>
+        </svg>
+      </div>
+      <div class="legend">
+        <span><i class="sw train"></i>được huấn luyện</span>
+        <span><i class="sw frozen"></i>đóng băng / văn bản thường</span>
+        <span><i class="sw ev"></i>câu gốc chọn theo câu hỏi</span>
+        <span><i class="sw line"></i>luồng tính</span>
+        <span><i class="sw grad"></i>gradient ngược về bộ ghi</span>
+      </div>
+      <figcaption>Câu hỏi chỉ vào hệ thống ở phía đọc: nó chọn câu gốc và đứng sau memory trong prompt, còn bộ ghi không bao giờ thấy nó. Câu gốc là văn bản nên không có gradient; gradient đi từ loss qua reader đóng băng tới memory rồi vào bộ ghi. Khi train, đáp án được đưa sẵn (teacher forcing) nên chỉ cần một lượt forward.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>Bốn cấu hình được so trong G1</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Cấu hình</th><th>Bộ ghi</th><th>Khe ngữ cảnh (cùng ngân sách k)</th><th>Ghi một lần?</th><th>Dùng cho</th></tr>
+        </thead>
+        <tbody>
+          <tr class="main"><td>ViLatent-ME</td><td>không thấy câu hỏi, gộp r·f, f ∈ {2, 4, 8}</td><td>kₘ vector memory + (k − kₘ) token câu gốc BM25</td><td>có</td><td>H1–H3, cổng G1</td></tr>
+          <tr><td>ViLatent-MEF</td><td>như ME</td><td>như ME; đọc lại toàn văn khi log-prob câu trả lời &lt; τ</td><td>có</td><td>H7, đường đánh đổi</td></tr>
+          <tr><td>ViLatent-M</td><td>không thấy câu hỏi, gộp r</td><td>k vector memory</td><td>có</td><td>đối chứng H6</td></tr>
+          <tr><td>W5</td><td>thấy câu hỏi: [mồi][câu hỏi][khúc]</td><td>k vector memory</td><td>không, ghi lại mỗi câu hỏi</td><td>H6: cái giá của nén mù câu hỏi</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="prose muted">f được chọn theo loss dev của giai đoạn 2, không theo F1 dev, vì cổng G1 đo bằng F1 dev. W5 và M dùng chung bộ ghi giai đoạn 1 ở 4×, nên hai nhánh chỉ khác nhau ở việc bộ ghi có thấy câu hỏi hay không.</p>
+  </section>
+
+  <section>
+    <h2>Độ lớn của từng phần</h2>
+    <p class="prose muted">Đếm từ cấu hình chính thức của hai reader (chỉ phần ngôn ngữ, bỏ vision encoder). Phép gộp không có tham số, nên bộ ghi ở mọi tỉ lệ và mọi cấu hình (kể cả W5) có cùng số tham số.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Thành phần</th><th class="r">Qwen3.5-2B</th><th class="r">Qwen3.5-9B</th><th>Trạng thái</th></tr>
+        </thead>
+        <tbody>
+          <tr class="group"><td colspan="4">Reader</td></tr>
+          <tr><td>Toàn bộ reader</td><td class="r">1.881,8 tr</td><td class="r">8.953,8 tr</td><td><span class="pill frozen">đóng băng</span></td></tr>
+          <tr><td>Embedding (vocab 248.320 × d)</td><td class="r">508,6 tr</td><td class="r">1.017,1 tr</td><td><span class="pill frozen">đóng băng</span></td></tr>
+          <tr><td>lm_head</td><td class="r">dùng chung embedding</td><td class="r">1.017,1 tr</td><td><span class="pill frozen">đóng băng</span></td></tr>
+          <tr><td>Số lớp (DeltaNet + Attention)</td><td class="r">24 (18 + 6)</td><td class="r">32 (24 + 8)</td><td></td></tr>
+          <tr><td>Kích thước ẩn d</td><td class="r">2.048</td><td class="r">4.096</td><td></td></tr>
+          <tr class="group"><td colspan="4">Bộ ghi</td></tr>
+          <tr><td>4 lớp đáy (bản sao của reader)</td><td class="r">228,9 tr</td><td class="r">864,9 tr</td><td><span class="pill train">train · lr 2e-5</span></td></tr>
+          <tr><td>Adapter W (d × d, khởi tạo bằng I)</td><td class="r">4,19 tr</td><td class="r">16,78 tr</td><td><span class="pill train">train · lr 1e-4</span></td></tr>
+          <tr><td>⟨mem⟩, ⟨/mem⟩ (2 × d) và hệ số s</td><td class="r">4.097</td><td class="r">8.193</td><td><span class="pill train">train · lr 1e-4</span></td></tr>
+          <tr class="total"><td>Tổng phần được train</td><td class="r">233,1 tr (12,4%)</td><td class="r">881,7 tr (9,8%)</td><td></td></tr>
+          <tr class="group"><td colspan="4">Chọn câu gốc (ME)</td></tr>
+          <tr><td>BM25 trên âm tiết</td><td class="r">0</td><td class="r">0</td><td><span class="pill ev">không học, không gradient</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Hai giai đoạn huấn luyện</h2>
+    <div class="cols">
+      <div class="card">
+        <span class="eyebrow">Giai đoạn 1 · tiếp nối văn bản · 4 bộ ghi</span>
+        <dl>
+          <dt>Dữ liệu</dt><dd>khoảng 96.000 cặp (A, B), Wikipedia và BKAINewsCorpus 50 : 50</dd>
+          <dt>Bị nén</dt><dd>đoạn A, 128–1.024 token; không có câu hỏi</dd>
+          <dt>Token đích</dt><dd>128 token tiếp theo (B)</dd>
+          <dt>Bộ ghi</dt><dd class="num">4× (cho M, W5) · 8×, 16×, 32× (cho ME với f = 2, 4, 8)</dd>
+          <dt>Số bước</dt><dd class="num">2.500 × batch 32 mỗi bộ ghi</dd>
+        </dl>
+      </div>
+      <div class="card">
+        <span class="eyebrow">Giai đoạn 2 · hỏi đáp · 5 lượt</span>
+        <dl>
+          <dt>Dữ liệu</dt><dd>ViQuAD 2.0 train, 18.063 câu trước bước lọc rò rỉ</dd>
+          <dt>Lượt</dt><dd>ME f = 2, 4, 8 (câu gốc BM25 có sẵn trong đầu vào reader) · M · W5</dd>
+          <dt>Token đích</dt><dd>đáp án và token kết thúc lượt</dd>
+          <dt>Số bước</dt><dd class="num">2.000 × batch 32, khởi đầu từ bộ ghi giai đoạn 1 cùng tỉ lệ</dd>
+          <dt>Chọn</dt><dd>checkpoint và f theo loss thấp nhất trên ViQuAD dev</dd>
+        </dl>
+      </div>
+    </div>
+    <p class="settings">Chung cho mọi lượt: AdamW, không weight decay · warmup 3% rồi giảm tuyến tính về 0 · cắt chuẩn gradient 1,0 · trọng số train ở fp32, tính bằng autocast bf16 · gradient checkpointing · thầy dùng chung cho mọi cấu hình.</p>
+  </section>
+
+  <section>
+    <h2>Ngân sách token và phần được bảo đảm nguyên văn</h2>
+    <p class="prose">Mọi phương pháp nhận cùng k token của reader. Các thanh vẽ theo cùng tỉ lệ cho một đoạn dev có độ dài trung vị (204 token, k = 51 ở 4×). Cột phải cho biết tỉ lệ câu hỏi trên ViQuAD dev mà đáp án vàng nằm nguyên văn trong phần văn bản được đưa cho reader.</p>
+    <div class="bars" role="img" aria-label="Ngân sách 4 lần cho đoạn dev trung vị 204 token. ME f bằng 2: 26 vector memory và 26 token câu gốc, 29 phần trăm có đáp án nguyên văn. f bằng 4: 13 và 39, 44,3 phần trăm. f bằng 8: 7 và 45, 54,2 phần trăm. BM25 dùng cả 51 token: 60,8 phần trăm. Truncation 51 token: 30,2 phần trăm. Lead-k khoảng 25 token: 18 phần trăm. ViLatent-M và W5 chỉ có memory.">
+      <div class="bar-head"><span>Phương pháp</span><span>Ngân sách (204 token = cả thanh)</span><span>Đáp án nguyên văn</span></div>
+      <div class="bar-row"><span>Ngữ cảnh đầy đủ</span><div class="bar-track"><div class="seg txt" style="width:100%"></div></div><span class="cov">100%</span><span class="bar-note">204 token · cận trên</span></div>
+      <div class="bar-sep"></div>
+      <div class="bar-row main"><span>ViLatent-ME, f = 2</span><div class="bar-track"><div class="seg mem" style="width:12.7%"></div><div class="seg ev" style="width:12.3%"></div></div><span class="cov">29,0%</span><span class="bar-note">26 vector memory (8×) + 25 token câu gốc</span></div>
+      <div class="bar-row main"><span>ViLatent-ME, f = 4</span><div class="bar-track"><div class="seg mem" style="width:6.4%"></div><div class="seg ev" style="width:18.6%"></div></div><span class="cov">44,3%</span><span class="bar-note">13 vector (16×) + 38 token câu gốc</span></div>
+      <div class="bar-row main"><span>ViLatent-ME, f = 8</span><div class="bar-track"><div class="seg mem" style="width:3.4%"></div><div class="seg ev" style="width:21.6%"></div></div><span class="cov">54,2%</span><span class="bar-note">7 vector (32×) + 44 token câu gốc</span></div>
+      <div class="bar-row"><span>ViLatent-M, W5</span><div class="bar-track"><div class="seg mem" style="width:25%"></div></div><span class="cov">—</span><span class="bar-note">51 vector memory, không có văn bản</span></div>
+      <div class="bar-sep"></div>
+      <div class="bar-row"><span>BM25 theo câu hỏi</span><div class="bar-track"><div class="seg ev" style="width:24.8%"></div></div><span class="cov">60,8%</span><span class="bar-note">≈ 51 token câu gốc · mốc cứng có dùng câu hỏi</span></div>
+      <div class="bar-row"><span>Truncation</span><div class="bar-track"><div class="seg txt" style="width:25%"></div></div><span class="cov">30,2%</span><span class="bar-note">51 token đầu</span></div>
+      <div class="bar-row"><span>LLMLingua-2</span><div class="bar-track"><div class="seg txt" style="width:25%"></div></div><span class="cov">chưa đo</span><span class="bar-note">≤ 51 · dò rate cho vừa 97–100% k</span></div>
+      <div class="bar-row"><span>Lead-k (câu trọn vẹn)</span><div class="bar-track"><div class="seg txt" style="width:12.1%"></div></div><span class="cov">18,0%</span><span class="bar-note">≈ 25 · trung bình dùng 48% k</span></div>
+      <div class="bar-row"><span>Không ngữ cảnh</span><div class="bar-track"></div><span class="cov">0%</span><span class="bar-note">0 · cận dưới</span></div>
+    </div>
+    <p class="prose muted">Ở 4×, ngay cả khi dồn cả ngân sách cho câu gốc chọn theo câu hỏi, chỉ 60,8% câu có đáp án nguyên văn. Phần còn lại phải dựa vào memory, nên không cách chia ngân sách nào tự loại bỏ được rủi ro mất thông tin; lưới an toàn thật là cơ chế đọc lại của MEF. Memory vẫn có thể mang đáp án ở những câu này; cột phải chỉ đo phần được bảo đảm nguyên văn.</p>
+  </section>
+
+  <section>
+    <h2>Dự phòng MEF: đọc lại khi không chắc</h2>
+    <div class="fallback">
+      <div><b>1 · trả lời bằng ME</b>Reader đọc memory và câu gốc, sinh câu trả lời; ghi log-prob của từng token.</div>
+      <div class="keep"><b>2a · log-prob trung bình ≥ τ</b>Giữ câu trả lời. Chi phí: k token.</div>
+      <div class="back"><b>2b · log-prob trung bình &lt; τ</b>Đọc lại toàn văn và trả lời lại. Chi phí: k + n token.</div>
+      <div><b>chọn τ trên dev</b>Ngưỡng nhỏ nhất (ít lần đọc lại nhất) đạt ≥ 95% F1 của toàn văn; cố định trước khi chạy test.</div>
+    </div>
+    <p class="prose muted">Báo cáo: đường F1 theo số token trung bình khi τ thay đổi, tỉ lệ câu bị đọc lại, và tỉ lệ câu sai mà reader vẫn tự tin. Những câu sai tự tin này không bị cơ chế bắt, nên dự phòng chỉ giảm rủi ro chứ không bảo đảm tuyệt đối.</p>
+  </section>
+
+  <section>
+    <h2>Đánh giá và cổng G1</h2>
+    <ol class="steps">
+      <li><b>1 · nén</b>mỗi phương pháp đưa ngữ cảnh về đúng k token hoặc vector</li>
+      <li><b>2 · đọc</b>cùng reader, cùng template, tắt thinking</li>
+      <li><b>3 · sinh</b>greedy, tối đa 128 token, cùng một vòng giải mã</li>
+      <li><b>4 · chấm</b>F1 và EM trên âm tiết, so với đáp án vàng</li>
+      <li><b>5 · so sánh</b>bootstrap cặp theo đoạn văn, 10.000 lần</li>
+    </ol>
+    <div class="gate">
+      <h3>Tiêu chí qua G1, cố định trước khi chạy</h3>
+      <ul>
+        <li>Tập: ViQuAD dev, 1.175 câu trên 250 đoạn; ngân sách 4×.</li>
+        <li>Hệ được xét: ViLatent-ME với f chọn theo loss dev.</li>
+        <li>F1 của ViLatent-ME trừ F1 của mốc nén cứng tốt nhất ≥ 3 điểm, <strong>và</strong> cận dưới khoảng tin cậy 95% &gt; 0.</li>
+        <li>Báo cáo kèm: mốc tốt nhất của từng nhóm (có và không dùng câu hỏi), W5 − M, ME − M, ME với cả ba f, đường đánh đổi MEF.</li>
+        <li>Câu trả lời không đọc được dưới 2% ở mọi phương pháp. Tập test (2.653 câu) không được dùng ở G0 hay G1.</li>
+      </ul>
+    </div>
+  </section>
+
+  <p class="foot">Số tham số đếm từ cấu hình Qwen/Qwen3.5-2B và Qwen/Qwen3.5-9B trên Hugging Face. Độ dài đoạn, cách chia ngân sách và tỉ lệ có đáp án nguyên văn đo ngày 16/10/2026 trên 1.175 câu ViQuAD dev với tokenizer Qwen3.5; số vector và số token là trung vị nên tổng của hai phần có thể lệch k một đơn vị. Cơ chế đọc theo câu hỏi dựa trên tra cứu tài liệu cùng ngày (docs/VILATENT.md, mục "Nén có điều kiện theo câu hỏi"). Chưa có kết quả huấn luyện.</p>
+</main>
+</body>
+</html>
