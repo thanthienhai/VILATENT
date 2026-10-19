@@ -18,7 +18,7 @@ from vilatent.baselines import Full
 from vilatent.data import Example, read_jsonl, write_jsonl, write_meta
 from vilatent.evaluate import evaluate_text
 from vilatent.leak import LeakIndex
-from vilatent.reader import load_reader
+from vilatent.reader import DTYPES, load_reader
 from vilatent.template import ReaderTemplate, load_reader_config
 
 REJECTION_ALERT = 0.20
@@ -33,6 +33,7 @@ def main():
     ap.add_argument("--threshold", type=float, default=0.8)
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--out", default="data/qa_gen/qa_clean.jsonl")
+    ap.add_argument("--dtype", choices=list(DTYPES), default="bfloat16", help="float16 on GPUs without bf16 (T4)")
     args = ap.parse_args()
 
     rows = [r for r in read_jsonl(args.input) if not r.get("empty")]
@@ -40,7 +41,7 @@ def main():
     leaked = {r["id"] for r in rows if index.leaks(r["context"]) or index.leaks(r["question"])}
     rows = [r for r in rows if r["id"] not in leaked]
 
-    reader, tokenizer = load_reader(args.reader)
+    reader, tokenizer = load_reader(args.reader, dtype=args.dtype)
     template = ReaderTemplate(load_reader_config(args.reader_config), tokenizer)
     examples = [Example(r["id"], r["cluster"], "qa", r["context"], question=r["question"], answers=r["answers"],
                         target=r["answers"][0]) for r in rows]
@@ -52,7 +53,7 @@ def main():
     by_type = Counter(r["answer_type"] for r in rows)
     kept_by_type = Counter(r["answer_type"] for r in kept)
     rejection = 1 - len(kept) / max(1, len(rows))
-    stats = {"input": len(rows) + len(leaked), "leaked": len(leaked), "checked": len(rows), "kept": len(kept),
+    stats = {"n_input": len(rows) + len(leaked), "leaked": len(leaked), "checked": len(rows), "kept": len(kept),
              "rejection_rate": rejection,
              "kept_share_by_type": {t: kept_by_type[t] / by_type[t] for t in by_type}}
     write_meta(args.out, input=args.input, reader=args.reader, template_hash=template.hash,

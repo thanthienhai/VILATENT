@@ -14,6 +14,8 @@ Usage:
 """
 import argparse
 import json
+import os
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -82,3 +84,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # After streaming Wikipedia, interpreter shutdown hangs forever in native code (seen with
+    # datasets 4.8.5, pyarrow, Python 3.13 on Kaggle; gc.collect() does not help). All output
+    # is written and closed at this point, so skip the shutdown.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)

@@ -1,6 +1,16 @@
 """CPU fixtures: a word-level tokenizer with a Qwen-like chat template and a tiny random
 Qwen3.5 reader (3 Gated DeltaNet layers + 1 attention layer, ×2). No download, no GPU."""
+import importlib.util
+import sys
+
 import pytest
+
+# The tests run on CPU, but transformers uses the flash-linear-attention / causal-conv1d kernels
+# (Triton, CUDA only) whenever they are installed, as on a GPU machine. Hide them before
+# transformers is imported so the tiny reader takes the pure-torch DeltaNet path.
+for _package in ("fla", "causal_conv1d"):
+    if _package not in sys.modules and importlib.util.find_spec(_package) is not None:
+        sys.modules[_package] = None
 
 TEMPLATE = (
     "{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<|im_end|>\n{% endfor %}"

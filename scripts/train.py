@@ -19,10 +19,16 @@ def main():
     ap.add_argument("--steps", type=int)
     ap.add_argument("--seed", type=int)
     ap.add_argument("--micro-batch", type=int)
+    ap.add_argument("--effective-batch", type=int)
+    ap.add_argument("--eval-every", type=int)
+    ap.add_argument("--dev-limit", type=int)
+    ap.add_argument("--dtype", choices=["bfloat16", "float16", "float32"], help="float16 on GPUs without bf16 (T4)")
     args = ap.parse_args()
     cfg = TrainConfig.from_yaml(args.config, out_dir=args.out_dir, init_from=args.init_from, ratio=args.ratio,
                                 mode=args.mode,
-                                steps=args.steps, seed=args.seed, micro_batch=args.micro_batch)
+                                steps=args.steps, seed=args.seed, micro_batch=args.micro_batch,
+                                effective_batch=args.effective_batch, eval_every=args.eval_every,
+                                dev_limit=args.dev_limit, dtype=args.dtype)
     print(train(cfg))
 
 

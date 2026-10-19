@@ -13,7 +13,8 @@
   their hidden states are dropped too; pooling, budget and parameters are those of W0.
 * RMSNorm with a learned scalar scale ``s``, initialised so that the mean L2 norm of the
   memory equals the mean L2 norm of the reader's input embeddings (W = I at the start).
-* Trainable weights are kept in fp32; the forward pass runs under bf16 autocast.
+* Trainable weights are kept in fp32; the forward pass runs under autocast in the reader's
+  dtype (bf16 by default, fp16 on GPUs without bf16 such as the T4; none for an fp32 reader).
 """
 from __future__ import annotations
 
@@ -78,6 +79,7 @@ class MemoryWriter(nn.Module):
         self.n_layers, self.ratio, self.lora_rank, self.autocast = n_layers, ratio, lora_rank, autocast
         self.sees_question = sees_question  # W5: [sink][question][chunk]; W0: [sink][chunk]
         self.layer_types = list(cfg.layer_types) if layer_types is not None else ["full_attention"] * n_layers
+        self.autocast_dtype = reader.get_input_embeddings().weight.dtype
         self.emb_norm = mean_embedding_norm(reader)
         self.scale = nn.Parameter(torch.tensor(self.emb_norm / math.sqrt(d)))
         self.adapter = nn.Linear(d, d, bias=False)
@@ -127,7 +129,8 @@ class MemoryWriter(nn.Module):
         total = starts + lengths
         mask = (torch.arange(chunk_embeds.shape[1], device=lengths.device)[None, :] < total[:, None]).long()
         device_type = chunk_embeds.device.type
-        with torch.autocast(device_type, dtype=torch.bfloat16, enabled=self.autocast):
+        enabled = self.autocast and self.autocast_dtype in (torch.bfloat16, torch.float16)
+        with torch.autocast(device_type, dtype=self.autocast_dtype, enabled=enabled):
             h = self.body(inputs_embeds=chunk_embeds.float(), attention_mask=mask,
                           use_cache=False).last_hidden_state
             # keep only the chunk positions of every row: h[i, starts[i] : starts[i] + lengths[i]]

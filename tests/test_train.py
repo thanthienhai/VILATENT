@@ -28,7 +28,7 @@ def test_train_two_steps(tokenizer, tmp_path, monkeypatch):
     save_teacher(teacher, compute_teacher(reader, template, load_examples(data, "qa")), template, 20, str(data))
     assert set(load_teacher(teacher, template)) == {r["id"] for r in ROWS}
 
-    monkeypatch.setattr(T, "load_reader", lambda name: (reader, tokenizer))
+    monkeypatch.setattr(T, "load_reader", lambda name, **kwargs: (reader, tokenizer))
     cfg = T.TrainConfig(reader="tiny", reader_config=str(cfg_path), task="qa", train=str(data), dev=str(data),
                         out_dir=str(tmp_path / "run"), teacher_train=str(teacher), teacher_dev=str(teacher),
                         steps=2, effective_batch=4, micro_batch=2, eval_every=1, chunk_tokens=8)

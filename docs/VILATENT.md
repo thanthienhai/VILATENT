@@ -288,7 +288,7 @@ ViLatent-ME dùng câu hỏi lúc đọc, nên mốc so sánh trực tiếp nh�
    - Không dùng `/think` hay `/nothink`, vì Qwen3.5 không hỗ trợ hai lệnh này.
    - Qwen2.5 và Vistral không có thinking, nên giữ nguyên template gốc.
 2. **Render template một lần cho mỗi reader.** Lưu chuỗi token đứng trước và sau memory vào file cấu hình.
-   - Dùng `scripts/check_reader_template.py` để xem template chèn gì vào lượt trả lời khi tắt thinking, chẳng hạn một khối `<think></think>` rỗng. Model card không nói điều này.
+   - Dùng `scripts/render_template.py` để xem template chèn gì vào lượt trả lời khi tắt thinking, chẳng hạn một khối `<think></think>` rỗng. Model card không nói điều này.
    - Phần chèn đó phải giống hệt nhau ở logit thầy, huấn luyện, đánh giá và các mốc nén cứng.
 3. **Nội dung chỉ dẫn và system prompt giống nhau giữa các reader.** Chỉ khác phần định dạng do template chính thức của từng reader quy định.
 4. **Giải mã greedy, cùng `max_new_tokens` cho mọi reader và mọi phương pháp.** Ở chế độ non-thinking, Qwen khuyến nghị lấy mẫu (temperature 0,7, top\_p 0,8, presence\_penalty 1,5). Ta dùng greedy để tái lập được, và ghi rõ độ lệch này trong bài.

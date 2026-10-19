@@ -4,6 +4,8 @@
 #   bash scripts/run_g1.sh qa_gen                     # background job (teacher endpoint)
 #   bash scripts/run_g1.sh teacher stage1 stage2 eval select fallback report   # week 3
 # Each stage reads only the files written by the previous ones.
+# Independent runs (teacher files, stage 1, stage 2, evaluation) are spread over the GPUs in GPUS.
+# The size variables below exist for scripts/smoke_g1.sh; leave them at their defaults for G1.
 set -euo pipefail
 
 READER=${READER:-Qwen/Qwen3.5-2B}
@@ -13,6 +15,14 @@ RATIO=${RATIO:-4}
 TEACHER_URL=${TEACHER_URL:-http://172.16.9.11:30048/v1}
 TEACHER_MODEL=${TEACHER_MODEL:-icmodel/icom-model-llm-ic-v3.8-27b}
 N_PAIRS=${N_PAIRS:-96000}
+N_DEV_PAIRS=${N_DEV_PAIRS:-1000}
+N_WIKI=${N_WIKI:-200000}
+N_NEWS=${N_NEWS:-200000}
+DTYPE=${DTYPE:-bfloat16}        # float16 on GPUs without bf16 (T4)
+GPUS=${GPUS:-0}                 # e.g. "0 1": independent runs go round-robin to these GPUs
+G0_READERS=${G0_READERS:-"$READER $READER_9B"}
+TRAIN_ARGS=${TRAIN_ARGS:-}      # extra scripts/train.py arguments (smoke test: --steps …)
+EVAL_ARGS=${EVAL_ARGS:-}        # extra scripts/evaluate.py arguments (smoke test: --batch-size …)
 EVAL_FILES="data/tasks/viquad_dev.jsonl data/tasks/viquad_test.jsonl"
 CFG=configs/readers/$SLUG.json
 TEACHER_DIR=data/teacher/$SLUG
@@ -20,15 +30,41 @@ export PYTHONIOENCODING=utf-8
 
 log() { echo "[$(date '+%F %T')] $*"; }
 
+# Run the given commands with one queue per GPU (command i goes to GPU i mod n); fails if any fails.
+on_gpus() {
+  local gpus=($GPUS) n g i pids=() status=0
+  n=${#gpus[@]}
+  for ((g = 0; g < n; g++)); do
+    (
+      for ((i = g + 1; i <= $#; i += n)); do
+        log "GPU ${gpus[$g]}: ${!i}"
+        CUDA_VISIBLE_DEVICES=${gpus[$g]} bash -c "${!i}"
+      done
+    ) &
+    pids+=($!)
+  done
+  for pid in "${pids[@]}"; do wait "$pid" || status=1; done
+  return $status
+}
+
+reader_cfg() {
+  case "$1" in
+    "$READER") echo "$CFG" ;;
+    "$READER_9B") echo configs/readers/qwen3.5-9b.json ;;
+    *) echo "no reader config for $1" >&2; return 1 ;;
+  esac
+}
+
 stage_data() {
   log "ViQuAD 2.0 (ViWord-C split) and leak-filtered train"
   python scripts/prepare_viquad.py --out-dir data/tasks
   python scripts/leak_filter.py --input data/tasks/viquad_train.jsonl --eval-files $EVAL_FILES \
     --out data/tasks/viquad_train_clean.jsonl
   log "stage-1 corpus (Wikipedia + BKAINewsCorpus) and (A, B) pairs"
-  python scripts/build_corpus.py --eval-files $EVAL_FILES --out data/corpus/docs.jsonl
+  python scripts/build_corpus.py --eval-files $EVAL_FILES --n-wiki "$N_WIKI" --n-news "$N_NEWS" \
+    --out data/corpus/docs.jsonl
   python scripts/make_pairs.py --docs data/corpus/docs.jsonl --reader "$READER" --n-train "$N_PAIRS" \
-    --out-dir data/stage1
+    --n-dev "$N_DEV_PAIRS" --out-dir data/stage1
 }
 
 stage_template() {
@@ -38,9 +74,10 @@ stage_template() {
 }
 
 stage_g0() {
-  log "G0 on $READER and $READER_9B"
-  python scripts/g0_check.py --reader "$READER" --reader-config "$CFG"
-  python scripts/g0_check.py --reader "$READER_9B" --reader-config configs/readers/qwen3.5-9b.json
+  for r in $G0_READERS; do
+    log "G0 on $r"
+    python scripts/g0_check.py --reader "$r" --reader-config "$(reader_cfg "$r")" --dtype "$DTYPE"
+  done
 }
 
 stage_qa_gen() {
@@ -48,37 +85,39 @@ stage_qa_gen() {
   python scripts/generate_qa.py --docs data/corpus/docs.jsonl --base-url "$TEACHER_URL" --model "$TEACHER_MODEL" \
     --out data/qa_gen/qa_raw.jsonl
   python scripts/filter_qa.py --input data/qa_gen/qa_raw.jsonl --reader "$READER" --reader-config "$CFG" \
-    --eval-files $EVAL_FILES --out data/qa_gen/qa_clean.jsonl
+    --eval-files $EVAL_FILES --out data/qa_gen/qa_clean.jsonl --dtype "$DTYPE"
 }
 
 stage_teacher() {
+  local jobs=() pair
   for pair in "data/stage1/pairs_train.jsonl continue pairs_train" "data/stage1/pairs_dev.jsonl continue pairs_dev" \
               "data/tasks/viquad_train_clean.jsonl qa viquad_train" "data/tasks/viquad_dev.jsonl qa viquad_dev"; do
     set -- $pair
-    log "teacher logits: $1"
-    python scripts/precompute_teacher.py --reader "$READER" --reader-config "$CFG" --data "$1" --task "$2" \
-      --out "$TEACHER_DIR/$3.pt"
+    jobs+=("python scripts/precompute_teacher.py --reader $READER --reader-config $CFG --data $1 --task $2 --out $TEACHER_DIR/$3.pt --dtype $DTYPE")
   done
+  log "teacher logits for the stage-1 pairs and ViQuAD train/dev"
+  on_gpus "${jobs[@]}"
 }
 
 # Stage-1 writers: 4x (ViLatent-M, W5) and 8x/16x/32x (ViLatent-ME with f = 2, 4, 8 at a 4x budget).
 # The configs are written for RATIO=4.
+train_cmd() { echo "python scripts/train.py --config configs/g1/$1.yaml --dtype $DTYPE $TRAIN_ARGS"; }
 stage_stage1() {
-  for r in 4 8 16 32; do python scripts/train.py --config "configs/g1/stage1_r$r.yaml"; done
+  on_gpus "$(train_cmd stage1_r4)" "$(train_cmd stage1_r8)" "$(train_cmd stage1_r16)" "$(train_cmd stage1_r32)"
 }
 stage_stage2() {
-  for f in 2 4 8; do python scripts/train.py --config "configs/g1/stage2_me_f$f.yaml"; done  # needed for the gate
-  python scripts/train.py --config configs/g1/stage2_m.yaml
-  python scripts/train.py --config configs/g1/stage2_w5.yaml
+  # the three ME runs are needed for the gate; M and W5 are reported alongside
+  on_gpus "$(train_cmd stage2_me_f2)" "$(train_cmd stage2_me_f4)" "$(train_cmd stage2_me_f8)" \
+          "$(train_cmd stage2_m)" "$(train_cmd stage2_w5)"
 }
 
 stage_eval() {
   log "ViQuAD dev at ${RATIO}x: references, hard baselines, ViLatent-ME (f = 2, 4, 8), -M, W5"
-  python scripts/evaluate.py --reader "$READER" --reader-config "$CFG" --data data/tasks/viquad_dev.jsonl \
-    --ratios "$RATIO" --methods full none truncation lead bm25 llmlingua2 \
-    "vilatent:runs/g1_stage2_me_f2_r${RATIO}/best.pt" "vilatent:runs/g1_stage2_me_f4_r${RATIO}/best.pt" \
-    "vilatent:runs/g1_stage2_me_f8_r${RATIO}/best.pt" "vilatent:runs/g1_stage2_m_r${RATIO}/best.pt" \
-    "vilatent:runs/g1_stage2_w5_r${RATIO}/best.pt" --out-dir results/g1_dev
+  local eval="python scripts/evaluate.py --reader $READER --reader-config $CFG --data data/tasks/viquad_dev.jsonl"
+  eval+=" --ratios $RATIO --out-dir results/g1_dev --dtype $DTYPE $EVAL_ARGS --methods"
+  local ckpt="runs/g1_stage2_%s_r${RATIO}/best.pt" soft="" run
+  for run in me_f2 me_f4 me_f8 m w5; do soft+=" vilatent:$(printf "$ckpt" "$run")"; done
+  on_gpus "$eval full none truncation lead bm25 llmlingua2" "$eval$soft"
 }
 
 # ViLatent-ME: memory factor f chosen on stage-2 dev loss (not on dev F1, which the gate uses)

@@ -4,10 +4,11 @@ Criterion, fixed before the run: at budget ratio r (default 4), the main system 
 (rows ``vilatent_me``: the memory factor f chosen on dev loss by scripts/select_me.py) passes G1 when its mean F1 minus the mean F1 of the best hard baseline
 (truncation, lead, bm25, llmlingua2; the best is the one with the highest mean F1 at that
 ratio) is at least 3 F1 points AND the lower bound of its 95% cluster-bootstrap CI (passages
-as clusters) is above 0.
+as clusters) is above 0 AND every method in the report has fewer than 2% unreadable answers
+(docs/RUN_G0_G1.md, "Tiêu chí G1").
 
 Also reported: F1/EM of every method, the best hard baseline of each group (without and with
-the question), retention (F1 / full-context F1), the unreadable share (must be < 2%), the MDE
+the question), retention (F1 / full-context F1), the unreadable share of each method, the MDE
 of the paired difference (used to size H2), and, descriptively, the other ViLatent
 configurations found in the folder (vilatent_m, vilatent_w5, vilatent_mef) with the paired
 differences W5 − M (H6: cost of the question-blind writer) and ME − M (what the sentences add).
@@ -74,7 +75,9 @@ def main():
              for name, rows in every.items()}
     best = max(hard, key=lambda m: table[m]["f1"])
     test = diff(args.vilatent, best)
-    passed = test["diff"] >= THRESHOLD_F1 and test["ci_low"] > 0 and not missing
+    unreadable_ok = {m: t["unreadable_rate"] < MAX_UNREADABLE for m, t in table.items()}
+    passed = (test["diff"] >= THRESHOLD_F1 and test["ci_low"] > 0 and not missing
+              and all(unreadable_ok.values()))
     by_group = {g: max((m for m in ms if m in hard), key=lambda m: table[m]["f1"], default=None)
                 for g, ms in HARD_GROUPS.items()}
     report = {
@@ -85,8 +88,9 @@ def main():
         "diff_vs_best_hard_by_group": {g: diff(args.vilatent, m) for g, m in by_group.items() if m},
         "descriptive_pairs": {f"{a} - {b}": diff(a, b) for a, b in PAIRS if a in every and b in every},
         "retention_vs_full": table[args.vilatent]["f1"] / table["full"]["f1"] if "full" in table else None,
-        "unreadable_ok": {m: t["unreadable_rate"] < MAX_UNREADABLE for m, t in table.items()},
-        "criterion": f"diff >= {THRESHOLD_F1} F1 and 95% CI lower bound > 0",
+        "unreadable_ok": unreadable_ok,
+        "criterion": (f"diff >= {THRESHOLD_F1} F1 and 95% CI lower bound > 0 and unreadable < "
+                      f"{MAX_UNREADABLE:.0%} for every method"),
         "G1_pass": passed,
     }
     out = d / f"g1_report_r{args.ratio}.json"
@@ -101,6 +105,8 @@ def main():
         print(f"  {name}: {t['diff']:+.2f} F1, 95% CI [{t['ci_low']:.2f}, {t['ci_high']:.2f}]")
     if missing:
         print(f"WARNING: hard baselines not evaluated: {missing}; G1 needs all of them")
+    if bad := [m for m, ok in unreadable_ok.items() if not ok]:
+        print(f"WARNING: {MAX_UNREADABLE:.0%} or more unreadable answers: {bad}; G1 needs every method below it")
     print(f"G1: {'PASS' if passed else 'FAIL'} ({report['criterion']}) -> {out}")
 
 

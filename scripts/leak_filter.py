@@ -28,7 +28,7 @@ def main():
     rows = read_jsonl(args.input)
     kept = [r for r in rows if not any(index.leaks(r[f]) for f in FIELDS if f in r)]
     write_jsonl(args.out, kept)
-    stats = {"input": len(rows), "kept": len(kept), "dropped": len(rows) - len(kept)}
+    stats = {"n_input": len(rows), "kept": len(kept), "dropped": len(rows) - len(kept)}
     write_meta(args.out, input=args.input, eval_files=args.eval_files, ngram=index.n, **stats)
     print(json.dumps(stats))
 

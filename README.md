@@ -4,7 +4,7 @@ Mã nguồn nghiên cứu cho đề tài *ViLatent: nén mềm ngữ cảnh cho 
 đáy của reader, gộp trung bình mỗi r token, RMSNorm và adapter d×d) nén ngữ cảnh thành k memory vector. Reader đóng
 băng đọc các vector này qua `inputs_embeds`.
 
-- [`docs/VILATENT.md`](docs/VILATENT.md): đề xuất nghiên cứu (giả thuyết H1–H5, kiến trúc W0, cổng G0–G3). Các chú
+- [`docs/VILATENT.md`](docs/VILATENT.md): đề xuất nghiên cứu (giả thuyết H1–H7, kiến trúc W0, cổng G0–G3). Các chú
   thích "docs/VILATENT.md §…" trong mã trỏ tới tài liệu này.
 - [`docs/RUN_G0_G1.md`](docs/RUN_G0_G1.md): hướng dẫn chạy G0 và G1 trên máy GPU.
 - [`docs/ViLatent_g1.html`](docs/ViLatent_g1.html): sơ đồ huấn luyện và đánh giá G1 (mở bằng trình duyệt; bản lưu
@@ -57,7 +57,7 @@ pip install -e ".[kernels]"                      # kernel Gated DeltaNet (Linux 
 pytest -q                                        # 34 test, chạy trên CPU
 ```
 
-Qwen3.5 cần transformers có model type `qwen3_5` (đã thử với 5.12). Thiếu `flash-linear-attention` và
+Qwen3.5 cần transformers có model type `qwen3_5` (đã thử với 5.12 và 5.16). Thiếu `flash-linear-attention` và
 `causal-conv1d` thì transformers vẫn chạy DeltaNet bằng torch thuần nhưng chậm; `scripts/g0_check.py` báo cáo việc
 này. Trên Windows, đặt `PYTHONIOENCODING=utf-8` để in được tiếng Việt.
 
@@ -66,8 +66,12 @@ này. Trên Windows, đặt `PYTHONIOENCODING=utf-8` để in được tiếng V
 ```bash
 bash scripts/run_g1.sh data template g0                  # tuần 1–2: dữ liệu, template, cổng G0
 bash scripts/run_g1.sh qa_gen                             # chạy ngầm: QA sinh tự động (iCOMM 27B)
-bash scripts/run_g1.sh teacher stage1 stage2 eval report  # tuần 3: cổng G1
+bash scripts/run_g1.sh teacher stage1 stage2 eval select fallback report  # tuần 3: cổng G1
+bash scripts/smoke_g1.sh                                  # thử nhanh cả luồng ở quy mô nhỏ (vd. Kaggle 2× T4)
 ```
+
+Trên GPU không có bf16 (T4), đặt `DTYPE=float16`: reader chạy fp16, bộ ghi dùng autocast fp16 và loss được scale
+(GradScaler). Kết quả fp16 trên T4 chỉ dùng để thử đường chạy, không dùng làm bằng chứng cho G0/G1.
 
 Chi tiết từng bước, thời gian dự kiến và các file cần gửi lại nằm trong [`docs/RUN_G0_G1.md`](docs/RUN_G0_G1.md).
 

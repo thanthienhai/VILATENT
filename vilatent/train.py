@@ -10,6 +10,8 @@ Only the writer (copied layers or their LoRA, RMSNorm scale, adapter, boundary e
 trained; gradients flow back through the frozen reader. AdamW with two learning rates
 (adapter 1e-4, writer layers 2e-5), no weight decay, gradient norm clipped at 1.0, 3% linear
 warmup then linear decay to 0. The checkpoint with the lowest dev loss (CE + λ·KL) is kept.
+With ``dtype: float16`` (GPUs without bf16, e.g. the T4) the loss is scaled (torch GradScaler)
+so that small gradients coming back through the fp16 reader do not underflow.
 
 Every run writes ``config.json``, ``metrics.jsonl`` (one JSON line per log or eval event) and
 ``best.pt`` into ``out_dir``.
@@ -64,6 +66,7 @@ class TrainConfig:
     log_every: int = 10
     seed: int = 0
     gradient_checkpointing: bool = True
+    dtype: str = "bfloat16"  # reader dtype and writer autocast: bfloat16, float16 (T4) or float32
 
     @classmethod
     def from_yaml(cls, path: str, **overrides) -> "TrainConfig":
@@ -160,6 +163,15 @@ def check_gradients(writer: MemoryWriter) -> None:
             raise RuntimeError(f"gradient check failed on the writer {name}: {p.grad}")
 
 
+def grads_finite(params) -> bool:
+    return all(p.grad is None or bool(torch.isfinite(p.grad).all()) for p in params)
+
+
+# fp16 only: the first steps may overflow at the initial loss scale and are skipped by the
+# GradScaler; the gradient check runs on the first step with finite gradients, within this many
+MAX_SKIPPED_STEPS = 20
+
+
 def train(cfg: TrainConfig) -> Path:
     out_dir = Path(cfg.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -169,7 +181,7 @@ def train(cfg: TrainConfig) -> Path:
         raise ValueError("effective_batch must be a multiple of micro_batch")
     accum = cfg.effective_batch // cfg.micro_batch
 
-    reader, tokenizer = load_reader(cfg.reader)
+    reader, tokenizer = load_reader(cfg.reader, dtype=cfg.dtype)
     template = ReaderTemplate(load_reader_config(cfg.reader_config), tokenizer)
     if template.cfg["reader"] != cfg.reader:
         raise ValueError(f"{cfg.reader_config} was rendered for {template.cfg['reader']}, not {cfg.reader}")
@@ -207,30 +219,40 @@ def train(cfg: TrainConfig) -> Path:
     optimizer = torch.optim.AdamW(writer.param_groups(cfg.lr_adapter, cfg.lr_writer), weight_decay=cfg.weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda(round(cfg.warmup_frac * cfg.steps), cfg.steps))
     trainable = [p for g in optimizer.param_groups for p in g["params"]]
+    fp16 = cfg.dtype == "float16"
+    scaler = torch.amp.GradScaler(enabled=fp16)
 
     log = MetricsLog(out_dir / "metrics.jsonl")
-    log.write(event="start", n_train=len(train_ex), n_dev=len(dev_ex), accum=accum,
+    log.write(event="start", n_train=len(train_ex), n_dev=len(dev_ex), accum=accum, dtype=cfg.dtype,
               trainable_params=sum(p.numel() for p in trainable), emb_norm=writer.emb_norm)
     stream = batches(len(train_ex), cfg.micro_batch, cfg.seed)
-    best, t0 = float("inf"), time.time()
+    best, t0, checked = float("inf"), time.time(), False
     for step in range(cfg.steps):
         stats = {}
         for _ in range(accum):
             batch = [model.prepare(train_ex[i]) for i in next(stream)]
             out = model.loss(batch, teacher_for(teacher_train, batch), cfg.lambda_kl)
-            (out["loss"] / accum).backward()
+            scaler.scale(out["loss"] / accum).backward()
             for k, v in out.items():
                 stats[k] = stats.get(k, 0.0) + float(v) / accum
-        if step == 0:
-            check_gradients(writer)
+        scaler.unscale_(optimizer)
+        if not checked:
+            if fp16 and not grads_finite(trainable):
+                if step + 1 >= MAX_SKIPPED_STEPS:
+                    raise RuntimeError(f"fp16: gradients still not finite after {step + 1} steps")
+            else:
+                check_gradients(writer)
+                checked = True
         grad_norm = torch.nn.utils.clip_grad_norm_(trainable, cfg.max_grad_norm)
-        optimizer.step()
+        scaler.step(optimizer)  # skipped (fp16) when a gradient is not finite
+        scaler.update()
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
 
         if step % cfg.log_every == 0 or step == cfg.steps - 1:
             log.write(event="train", step=step + 1, lr_adapter=scheduler.get_last_lr()[0],
                       grad_norm=grad_norm, scale=writer.scale.detach(), emb_norm=writer.emb_norm,
+                      loss_scale=scaler.get_scale() if fp16 else 1.0,
                       sec_per_step=(time.time() - t0) / (step + 1),
                       peak_mem_gb=torch.cuda.max_memory_allocated() / 2**30 if torch.cuda.is_available() else 0,
                       **stats)

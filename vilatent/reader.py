@@ -15,13 +15,18 @@ from dataclasses import dataclass
 
 import torch
 
+# Reader dtype. bfloat16 is the default (H100); GPUs without bf16 (T4) use float16. The writer
+# runs under autocast in the same dtype (writer.MemoryWriter).
+DTYPES = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
 
-def load_reader(name: str, device: str = "cuda", dtype: torch.dtype = torch.bfloat16,
+
+def load_reader(name: str, device: str = "cuda", dtype: torch.dtype | str = torch.bfloat16,
                 return_loading_info: bool = False):
     """Frozen reader in eval mode. With ``return_loading_info`` also returns the missing and
     unexpected checkpoint keys (scripts/g0_check.py: no weight may stay randomly initialised)."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    dtype = DTYPES[dtype] if isinstance(dtype, str) else dtype
     tokenizer = AutoTokenizer.from_pretrained(name)
     model, info = AutoModelForCausalLM.from_pretrained(name, dtype=dtype, device_map=device,
                                                        output_loading_info=True)
