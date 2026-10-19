@@ -29,7 +29,7 @@ import torch
 
 from .data import load_examples
 from .model import ViLatent, writer_ratio
-from .reader import load_reader
+from .reader import fast_delta_rule, load_reader
 from .teacher import load_teacher
 from .template import ReaderTemplate, load_reader_config
 from .writer import MemoryWriter
@@ -67,6 +67,7 @@ class TrainConfig:
     seed: int = 0
     gradient_checkpointing: bool = True
     dtype: str = "bfloat16"  # reader dtype and writer autocast: bfloat16, float16 (T4) or float32
+    quant: str = "none"  # reader weights: none, or int4 for the T4 smoke test only (vilatent.reader)
 
     @classmethod
     def from_yaml(cls, path: str, **overrides) -> "TrainConfig":
@@ -87,7 +88,7 @@ def set_seed(seed: int) -> None:
 
 class MetricsLog:
     def __init__(self, path: Path):
-        self.f = open(path, "a", encoding="utf-8")
+        self.f = open(path, "w", encoding="utf-8")  # no resume: a rerun starts a fresh log
 
     def write(self, **row) -> None:
         row = {k: (float(v) if isinstance(v, torch.Tensor) else v) for k, v in row.items()}
@@ -175,13 +176,17 @@ MAX_SKIPPED_STEPS = 20
 def train(cfg: TrainConfig) -> Path:
     out_dir = Path(cfg.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "best.pt").unlink(missing_ok=True)  # a rerun must not leave the previous run's checkpoint
     (out_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2, ensure_ascii=False), encoding="utf-8")
     set_seed(cfg.seed)
     if cfg.effective_batch % cfg.micro_batch:
         raise ValueError("effective_batch must be a multiple of micro_batch")
     accum = cfg.effective_batch // cfg.micro_batch
 
-    reader, tokenizer = load_reader(cfg.reader, dtype=cfg.dtype)
+    reader, tokenizer = load_reader(cfg.reader, dtype=cfg.dtype, quant=cfg.quant)
+    if cfg.dtype == "float16" and reader.config.model_type.startswith("qwen3_5") and not fast_delta_rule():
+        raise RuntimeError("float16 training of Qwen3.5 needs the flash-linear-attention DeltaNet kernel: "
+                           "the pure-torch fallback gives NaN gradients in fp16 (pip install flash-linear-attention)")
     template = ReaderTemplate(load_reader_config(cfg.reader_config), tokenizer)
     if template.cfg["reader"] != cfg.reader:
         raise ValueError(f"{cfg.reader_config} was rendered for {template.cfg['reader']}, not {cfg.reader}")
@@ -224,7 +229,7 @@ def train(cfg: TrainConfig) -> Path:
 
     log = MetricsLog(out_dir / "metrics.jsonl")
     log.write(event="start", n_train=len(train_ex), n_dev=len(dev_ex), accum=accum, dtype=cfg.dtype,
-              trainable_params=sum(p.numel() for p in trainable), emb_norm=writer.emb_norm)
+              quant=cfg.quant, trainable_params=sum(p.numel() for p in trainable), emb_norm=writer.emb_norm)
     stream = batches(len(train_ex), cfg.micro_batch, cfg.seed)
     best, t0, checked = float("inf"), time.time(), False
     for step in range(cfg.steps):
@@ -263,5 +268,9 @@ def train(cfg: TrainConfig) -> Path:
                 best = dev["dev_loss"]
                 model.save(out_dir / "best.pt", extra={"step": step + 1, **dev})
             log.write(event="eval", step=step + 1, best=improved, **dev)
+    if not checked:  # fp16: every step was skipped, so the writer was never updated
+        raise RuntimeError(f"fp16: no step out of {cfg.steps} had finite gradients; the writer was not trained")
+    if best == float("inf"):
+        raise RuntimeError("dev loss was never finite: no checkpoint written")
     log.write(event="end", best_dev_loss=best, hours=(time.time() - t0) / 3600)
     return out_dir / "best.pt"

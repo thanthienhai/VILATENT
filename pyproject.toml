@@ -16,6 +16,8 @@ model = ["torch>=2.4", "transformers>=5.0", "peft>=0.13"]
 # Gated DeltaNet kernels with backward (Linux + CUDA only); without them transformers falls
 # back to a slow pure-torch implementation.
 kernels = ["flash-linear-attention", "causal-conv1d"]
+# int4 readers (bitsandbytes), for the T4 smoke test only.
+quant = ["bitsandbytes"]
 # Dataset download (ViQuAD, Wikipedia, BKAINewsCorpus).
 data = ["datasets>=2.19"]
 # LLMLingua-2 baseline.

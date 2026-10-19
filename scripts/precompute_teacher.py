@@ -12,7 +12,7 @@ import argparse
 import json
 
 from vilatent.data import load_examples
-from vilatent.reader import DTYPES, load_reader
+from vilatent.reader import DTYPES, QUANTS, load_reader
 from vilatent.teacher import compute_teacher, save_teacher
 from vilatent.template import ReaderTemplate, load_reader_config
 
@@ -28,9 +28,10 @@ def main():
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--dtype", choices=list(DTYPES), default="bfloat16", help="float16 on GPUs without bf16 (T4)")
+    ap.add_argument("--quant", choices=list(QUANTS), default="none", help="int4 reader: T4 smoke test only")
     args = ap.parse_args()
 
-    reader, tokenizer = load_reader(args.reader, dtype=args.dtype)
+    reader, tokenizer = load_reader(args.reader, dtype=args.dtype, quant=args.quant)
     template = ReaderTemplate(load_reader_config(args.reader_config), tokenizer)
     examples = load_examples(args.data, args.task, args.limit)
     records = compute_teacher(reader, template, examples, k=args.k, batch_size=args.batch_size)

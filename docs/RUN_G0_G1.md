@@ -29,8 +29,9 @@ Nguyên tắc chung:
 | Mạng | Truy cập được Hugging Face Hub (mô hình và dataset). Bước `qa_gen` cần thêm endpoint thầy iCOMM `http://172.16.9.11:30048/v1` trong mạng nội bộ |
 
 Môi trường đã chạy thử toàn bộ luồng (Kaggle, 2× T4, fp16, quy mô nhỏ): Python 3.13, torch 2.11.0+cu128,
-transformers 5.16.1, flash-linear-attention 0.5.2, causal-conv1d 1.7.0, datasets 4.8.5. **Chưa** chạy thử trên bf16
-và H100, nên bước 2 bên dưới là bắt buộc.
+transformers 5.16.1, flash-linear-attention 0.5.2, causal-conv1d 1.7.0, datasets 4.8.5. Ngày 19/10/2026, G0 đạt trên
+cả 2B và 9B ở đó với reader int4 (9B không tính gradient lớp bộ ghi vì T4 không đủ bộ nhớ). **Chưa** chạy thử trên
+bf16 và H100, nên bước 2 bên dưới là bắt buộc.
 
 ## 1. Cài đặt
 
@@ -38,11 +39,12 @@ và H100, nên bước 2 bên dưới là bắt buộc.
 git clone https://github.com/thanthienhai/VILATENT.git && cd VILATENT
 git checkout <commit hoặc nhánh được giao>
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,model,data,baselines,teacher]" flash-linear-attention
+# transformers ghim ở 5.16.1: G0 nhận diện kernel DeltaNet theo cách của 5.12 và 5.16 (5.13–5.15 chưa kiểm)
+pip install -e ".[dev,model,data,baselines,teacher]" "transformers==5.16.1" flash-linear-attention
 # causal-conv1d phải build từ source; 9.0 là kiến trúc của H100 (A100: 8.0). Mất một lúc.
 TORCH_CUDA_ARCH_LIST=9.0 MAX_JOBS=8 pip install --no-build-isolation causal-conv1d
 python -c "import torch, transformers, fla, causal_conv1d; print(torch.__version__, transformers.__version__, torch.cuda.is_available())"
-pytest -q                                   # 34 passed (chạy trên CPU)
+pytest -q                                   # 36 passed (chạy trên CPU)
 export HF_TOKEN=...                         # không bắt buộc (Qwen3.5 không gated), nhưng tránh bị giới hạn tốc độ tải
 mkdir -p logs
 ```
@@ -57,18 +59,19 @@ Việc này kiểm tra đường bf16 trên đúng máy sẽ chạy G1. Chạy t
 
 ```bash
 git clone . ../VILATENT-smoke && cd ../VILATENT-smoke
-DTYPE=bfloat16 GPUS="0" SMOKE_SHORT=1 bash scripts/smoke_g1.sh 2>&1 | tee ../VILATENT/logs/smoke.log
+# PYTHONPATH: dùng mã của bản sao, không phải bản cài editable trỏ về repo chính
+PYTHONPATH=$PWD DTYPE=bfloat16 GPUS="0" SMOKE_SHORT=1 bash scripts/smoke_g1.sh 2>&1 | tee ../VILATENT/logs/smoke.log
 cd ../VILATENT
 ```
 
 Với nhiều GPU, đặt `GPUS="0 1"` cho nhanh hơn.
 
-`SMOKE_SHORT=1` chạy mọi giai đoạn của G1 (trừ G0 và `qa_gen`) với vài chục mẫu và 4 bước huấn luyện. Kết quả đạt khi:
+`SMOKE_SHORT=1` chạy mọi giai đoạn của G1 (trừ G0 và `qa_gen`) với vài chục mẫu và 16 bước huấn luyện. Kết quả đạt khi:
 
 - Dòng cuối của log là `smoke: done; …`, và lệnh trả về exit 0.
 - `results/g1_dev/g1_report_r4.json` có mặt, kèm một bảng 13 phương pháp trong log.
 
-Dòng `G1: FAIL` ở cuối bảng là **bình thường**: với 4 bước, bộ ghi chưa học được gì. Số liệu của lượt thử không có
+Dòng `G1: FAIL` ở cuối bảng là **bình thường**: với 16 bước, bộ ghi chưa học được gì. Số liệu của lượt thử không có
 giá trị làm bằng chứng. Nếu lệnh dừng với lỗi: **Dừng**, gửi `logs/smoke.log`. Chạy xong thì xoá `../VILATENT-smoke`.
 
 ## 3. Tuần 1–2: dữ liệu, template, G0
@@ -118,8 +121,11 @@ G1 **không** dùng dữ liệu này (nó dành cho tuần 4–6), nhưng nên c
 và script tự chạy tiếp được nếu bị ngắt:
 
 ```bash
-nohup bash scripts/run_g1.sh qa_gen > logs/qa_gen.log 2>&1 &
+QA_GPU=1 nohup bash scripts/run_g1.sh qa_gen > logs/qa_gen.log 2>&1 &
 ```
+
+Cuối bước, `filter_qa` nạp reader lên GPU `QA_GPU` (mặc định là GPU cuối trong `GPUS`). Khi G1 chạy cùng lúc, đặt
+`QA_GPU` là một GPU mà G1 không dùng. Nếu chỉ có 1 GPU, chạy `qa_gen` sau khi G1 xong.
 
 Bước này chưa từng chạy thử, vì endpoint chỉ có trong mạng nội bộ. Nếu lỗi, gửi `logs/qa_gen.log`; việc này không
 chặn G1. Cuối bước, script in tỉ lệ câu bị loại ở bước kiểm tra hai chiều. Nếu tỉ lệ vượt 20%, cần người kiểm tra
@@ -171,8 +177,11 @@ W5 có thể dời sang tuần 4–6; f = 8 có thể bỏ).
 - `Converting a tensor with requires_grad=True to a scalar`: phát ra từ chỗ ghi log loss.
 
 Huấn luyện **không có chế độ chạy tiếp**. Nếu một lượt bị ngắt, chạy lại đúng lệnh của lượt đó. Lệnh được in trong log
-ở dòng `GPU <n>: python scripts/train.py --config …`, và lượt mới ghi đè `runs/<tên>/`. Các lượt `stage2` cần `best.pt`
-của lượt `stage1` tương ứng.
+ở dòng `GPU <n>: python scripts/train.py --config …`. Lượt mới xoá `best.pt` cũ và ghi lại `metrics.jsonl` từ đầu. Các
+lượt `stage2` cần `best.pt` của lượt `stage1` tương ứng.
+
+Khi một lượt lỗi, các lượt xếp sau nó trên **cùng GPU** không chạy, và log in dòng `GPU <n>: skipped (an earlier run on
+this GPU failed): …` cho từng lượt bị bỏ. Phải chạy lại cả lượt lỗi lẫn các lượt bị bỏ, hoặc chạy lại cả bước.
 
 ### Tiêu chí G1 (cố định trước khi chạy)
 
@@ -180,7 +189,8 @@ Trên ViQuAD dev ở 4×, G1 đạt khi thoả cả ba điều kiện:
 
 1. F1 của ViLatent-ME (f chọn theo loss dev) trừ F1 của mốc cứng tốt nhất ≥ 3 điểm.
 2. Cận dưới CI 95% (bootstrap theo đoạn văn) > 0.
-3. Tỉ lệ câu trả lời không đọc được dưới 2% với mọi phương pháp.
+3. Tỉ lệ câu trả lời không đọc được dưới 2% với ViLatent-ME và cả bốn mốc cứng. Với các phương pháp còn lại (full,
+   none, M, W5, MEF, các f khác), tỉ lệ này chỉ được báo cáo kèm cảnh báo.
 
 Kết quả nằm ở `G1_pass` trong `results/g1_dev/g1_report_r4.json`, và ở dòng `G1: PASS` hoặc `G1: FAIL` cuối log.
 Người chạy không cần diễn giải kết quả. Chỉ cần gửi về.
@@ -213,7 +223,7 @@ cầu, vì dung lượng khoảng chục GB.
 | `gradient check failed on the writer …` ở bước đầu (với fp16: `gradients still not finite after 20 steps`) | lỗi số học hoặc lỗi cài đặt | **Dừng**, gửi `logs/` và `runs/<tên>/metrics.jsonl` |
 | `only N wiki pairs for M wanted: build a larger corpus` | corpus quá ít bài đủ dài | **Dừng**, gửi `data/corpus/docs.jsonl.meta.json` |
 | `N examples have no teacher` | dữ liệu đã thay đổi sau khi chạy `teacher` | chạy lại `run_g1.sh teacher` rồi các bước sau |
-| `… was trained with another reader template` hoặc `template differs` | `configs/readers/*.json` bị render lại sau khi đã tính logit thầy hoặc đã huấn luyện | khôi phục bằng `git checkout configs/readers`, hoặc chạy lại từ `teacher`; báo chủ đề tài |
+| `… was trained with another reader template`, `template differs` hoặc `teacher computed with another template` | `configs/readers/*.json` bị render lại sau khi đã tính logit thầy hoặc đã huấn luyện | khôi phục bằng `git checkout configs/readers`, hoặc chạy lại từ `teacher`; báo chủ đề tài |
 | Một bước in xong kết quả nhưng tiến trình không thoát, không dùng CPU | lỗi treo khi thoát sau khi đọc dataset dạng streaming (đã sửa trong `build_corpus.py`) | nếu gặp lại ở bước nào, ghi tên bước, dừng bằng Ctrl+C, rồi báo chủ đề tài |
 | Tải Hugging Face chậm hoặc lỗi 429 | giới hạn tốc độ khi chưa đăng nhập | đặt `HF_TOKEN` |
 
@@ -232,3 +242,4 @@ chỉ dùng để thử đường chạy, không dùng làm bằng chứng cho G
 | `N_PAIRS`, `N_DEV_PAIRS`, `N_WIKI`, `N_NEWS` | 96.000, 1.000, 200.000, 200.000 | cỡ dữ liệu giai đoạn 1; giữ mặc định |
 | `G0_READERS` | cả hai reader | reader được kiểm tra ở G0 (mục 3) |
 | `TRAIN_ARGS`, `EVAL_ARGS` | rỗng | dành cho `scripts/smoke_g1.sh`. Ngoài lượt thử, `TRAIN_ARGS` chỉ dùng để giảm micro-batch khi thiếu bộ nhớ |
+| `QUANT`, `G0_ARGS`, `SMOKE_9B` | `none`, rỗng, `0` | chỉ cho lượt thử trên Kaggle T4 (reader int4; G0 của 9B không tính gradient lớp bộ ghi). **Không dùng trên cụm**: kết quả int4 không phải bằng chứng cho G0/G1 |

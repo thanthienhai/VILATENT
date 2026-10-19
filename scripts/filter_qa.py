@@ -18,7 +18,7 @@ from vilatent.baselines import Full
 from vilatent.data import Example, read_jsonl, write_jsonl, write_meta
 from vilatent.evaluate import evaluate_text
 from vilatent.leak import LeakIndex
-from vilatent.reader import DTYPES, load_reader
+from vilatent.reader import DTYPES, QUANTS, load_reader
 from vilatent.template import ReaderTemplate, load_reader_config
 
 REJECTION_ALERT = 0.20
@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--out", default="data/qa_gen/qa_clean.jsonl")
     ap.add_argument("--dtype", choices=list(DTYPES), default="bfloat16", help="float16 on GPUs without bf16 (T4)")
+    ap.add_argument("--quant", choices=list(QUANTS), default="none", help="int4 reader: T4 smoke test only")
     args = ap.parse_args()
 
     rows = [r for r in read_jsonl(args.input) if not r.get("empty")]
@@ -41,7 +42,7 @@ def main():
     leaked = {r["id"] for r in rows if index.leaks(r["context"]) or index.leaks(r["question"])}
     rows = [r for r in rows if r["id"] not in leaked]
 
-    reader, tokenizer = load_reader(args.reader, dtype=args.dtype)
+    reader, tokenizer = load_reader(args.reader, dtype=args.dtype, quant=args.quant)
     template = ReaderTemplate(load_reader_config(args.reader_config), tokenizer)
     examples = [Example(r["id"], r["cluster"], "qa", r["context"], question=r["question"], answers=r["answers"],
                         target=r["answers"][0]) for r in rows]

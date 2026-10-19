@@ -159,15 +159,15 @@ Memory của một tài liệu được ghi một lần rồi dùng lại cho m�
 | **ViLatent-ME** (hệ chính) | ⟨mem⟩ memory ở tỉ lệ r·f ⟨/mem⟩, ngay sau đó là các câu gốc chọn theo câu hỏi, giữ thứ tự trong văn bản, không thêm nhãn | k_m = Σ⌈nᵢ/(r·f)⌉ vector + (k − k_m) token câu gốc = k | Hệ dùng cho H1–H3 và G1 |
 | ViLatent-MEF | Như ME; nếu log-prob trung bình của các token câu trả lời dưới τ thì đọc lại toàn văn | k, hoặc n khi đọc lại; báo cáo số token trung bình | H7 |
 
-- Câu gốc được chọn bằng BM25 trên âm tiết, cùng cách với mốc chọn câu: giữ các câu điểm cao nhất còn vừa, phần ngân sách còn lại lấp bằng phần đầu của câu điểm cao nhất chưa vừa. Con số, ngày tháng và tên riêng trong các câu này đến reader nguyên văn, đúng loại thông tin nén mềm hay làm mất [24].
-- Ngưỡng τ chọn trên dev: τ nhỏ nhất (ít lần đọc lại nhất) sao cho F1 của MEF ≥ 95% F1 toàn văn. τ được chốt trước khi chạy test. Câu trả lời sai nhưng reader vẫn tự tin không bị cơ chế này bắt, nên tỉ lệ đó được báo cáo riêng [22].
+- Câu gốc được chọn bằng BM25 trên âm tiết, cùng cách với mốc chọn câu: giữ các câu điểm cao nhất còn vừa (chỉ câu có điểm > 0, tức có âm tiết chung với câu hỏi), phần ngân sách còn lại lấp bằng phần đầu của câu điểm cao nhất chưa vừa, cắt theo token của reader. Con số, ngày tháng và tên riêng trong các câu này đến reader nguyên văn, đúng loại thông tin nén mềm hay làm mất [24].
+- Ngưỡng τ chọn trên dev: τ nhỏ nhất (ít lần đọc lại nhất) sao cho F1 của MEF ≥ 95% F1 toàn văn. Mọi τ nằm giữa hai độ tự tin liền kề trên dev cho cùng kết quả, nên τ đặt ở điểm giữa. τ được chốt trước khi chạy test. Câu trả lời sai nhưng reader vẫn tự tin không bị cơ chế này bắt, nên tỉ lệ đó được báo cáo riêng [22].
 - **Hệ số memory f ∈ {2, 4, 8}** quyết định cách chia ngân sách: phần câu gốc xấp xỉ 50%, 75% và 87,5% của k. f được chọn theo loss dev của giai đoạn 2 (CE + λ·KL, cùng đáp án và cùng thầy nên so sánh được giữa các f), không theo F1 dev, vì cổng G1 đo bằng F1 dev và chọn theo chính F1 đó sẽ làm cổng lạc quan. F1 của cả ba f vẫn được báo cáo. Mỗi f cần một bộ ghi huấn luyện ở r·f (G1 ở 4× dùng bộ ghi 8×, 16× và 32×).
-- **Đo trước trên ViQuAD dev** (1.175 câu, tokenizer Qwen3.5, ngày 16/10/2026): tỉ lệ câu có đáp án vàng nằm nguyên văn trong phần câu gốc. Đoạn ViQuAD ngắn (trung vị 204 token), nên ở 4× cả ngân sách chỉ khoảng 51 token và không cách chọn văn bản nào tự loại bỏ được rủi ro. Phần còn lại phải dựa vào memory, và lưới an toàn thật là cơ chế dự phòng của MEF.
+- **Đo trước trên ViQuAD dev** (1.175 câu, tokenizer Qwen3.5, đo lại ngày 19/10/2026 với cách chọn câu hiện tại; bản 16/10 còn giữ câu điểm 0 và lấp theo từ, cho 29,0% / 44,3% / 54,2% / 60,8%): tỉ lệ câu có đáp án vàng nằm nguyên văn trong phần câu gốc. Đoạn ViQuAD ngắn (trung vị 204 token), nên ở 4× cả ngân sách chỉ khoảng 51 token và không cách chọn văn bản nào tự loại bỏ được rủi ro. Phần còn lại phải dựa vào memory, và lưới an toàn thật là cơ chế dự phòng của MEF.
 
   | Ngân sách 4× | f = 2 (memory 8×) | f = 4 (16×) | f = 8 (32×) | BM25 dùng cả k | Truncation |
   | --- | --- | --- | --- | --- | --- |
   | Memory / câu gốc (trung vị) | 26 vector / 26 token | 13 / 39 | 7 / 45 | 0 / 51 | 0 / 51 |
-  | Đáp án có nguyên văn | 29,0% | 44,3% | 54,2% | 60,8% | 30,2% |
+  | Đáp án có nguyên văn | 29,9% | 46,6% | 56,0% | 61,8% | 30,2% |
 
 **Các biến thể cho ablation:**
 

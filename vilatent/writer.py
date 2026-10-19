@@ -40,6 +40,25 @@ def mean_pool(h: torch.Tensor, lengths: torch.Tensor, ratio: int) -> list[torch.
     return [means[i, : int(n_groups[i])] for i in range(c)]
 
 
+def bottom_layers_state(base, n_layers: int) -> dict[str, torch.Tensor]:
+    """State dict of the first ``n_layers`` decoder layers of the reader's text model. Linear
+    layers of a reader loaded in int4 (bitsandbytes, smoke test only) are dequantized, so the
+    writer always starts as a plain floating-point copy."""
+    def in_bottom(key: str) -> bool:
+        return key.startswith("layers.") and int(key.split(".")[1]) < n_layers
+
+    state = {k: v for k, v in base.state_dict().items() if in_bottom(k)}
+    for name, module in base.named_modules():
+        weight = getattr(module, "weight", None)
+        if in_bottom(name) and hasattr(weight, "quant_state"):  # bitsandbytes Params4bit
+            from bitsandbytes.functional import dequantize_4bit
+
+            key = f"{name}.weight"  # drop the packed weight and its quantization state
+            state = {k: v for k, v in state.items() if k != key and not k.startswith(key + ".")}
+            state[key] = dequantize_4bit(weight.data, weight.quant_state)
+    return state
+
+
 def mean_embedding_norm(reader) -> float:
     weight = reader.get_input_embeddings().weight
     return float(weight.float().norm(dim=-1).mean())
@@ -67,9 +86,7 @@ class MemoryWriter(nn.Module):
         cfg.vocab_size, cfg.pad_token_id = 1, None  # the writer always receives inputs_embeds
 
         body = type(base)(cfg)
-        layers = {k: v for k, v in base.state_dict().items()
-                  if k.startswith("layers.") and int(k.split(".")[1]) < n_layers}
-        missing, unexpected = body.load_state_dict(layers, strict=False)
+        missing, unexpected = body.load_state_dict(bottom_layers_state(base, n_layers), strict=False)
         if unexpected or any(k.startswith("layers.") for k in missing):
             raise RuntimeError(f"writer copy failed: missing={missing} unexpected={unexpected}")
         body.norm = nn.Identity()

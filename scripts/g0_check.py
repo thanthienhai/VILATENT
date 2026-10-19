@@ -24,6 +24,9 @@ Exit code 1 when a check fails. A JSON report goes to results/g0/<reader>.json.
 Usage:
   python scripts/g0_check.py --reader Qwen/Qwen3.5-2B --reader-config configs/readers/qwen3.5-2b.json
   python scripts/g0_check.py ... --dtype float16     # GPUs without bf16 (T4): smoke test only
+  python scripts/g0_check.py ... --dtype float16 --quant int4   # lighter reader: smoke only
+  python scripts/g0_check.py --reader Qwen/Qwen3.5-9B ... --dtype float16 --quant int4 --no-writer-layer-grad
+                                                      # the 9B on a 16 GB T4: smoke only
 """
 import argparse
 import json
@@ -32,6 +35,7 @@ import time
 from pathlib import Path
 
 import torch
+import transformers
 
 from vilatent.baselines import TokenCounter
 from vilatent.budget import context_budget
@@ -39,7 +43,7 @@ from vilatent.data import Example
 from vilatent.evaluate import MAX_NEW_TOKENS
 from vilatent.metrics import parse_answer, score_qa
 from vilatent.model import ViLatent
-from vilatent.reader import DTYPES, embed_ids, greedy_generate, load_reader
+from vilatent.reader import DTYPES, QUANTS, deltanet_kernels, embed_ids, greedy_generate, load_reader
 from vilatent.template import ReaderTemplate, load_reader_config
 from vilatent.writer import MemoryWriter
 
@@ -50,31 +54,6 @@ CONTEXT = ("Hà Nội là thủ đô của nước Cộng hòa xã hội chủ n
 QUESTIONS = [("Hà Nội có diện tích khoảng bao nhiêu?", "khoảng 3.359 km²"),
              ("Ai dời đô về Thăng Long?", "vua Lý Thái Tổ"),
              ("Thăng Long có từ năm nào?", "1010")]
-
-
-DELTANET_FUNCTIONS = ("torch_chunk_gated_delta_rule", "torch_recurrent_gated_delta_rule", "causal_conv1d_fn",
-                      "causal_conv1d_update")
-
-
-def _implementation(fn) -> str:
-    """Module of the function a transformers kernel wrapper calls: transformers ≥ 5.16 resolves
-    each kernel at import time (flash-linear-attention, causal-conv1d, else its torch code)."""
-    found = []
-    while fn is not None:
-        found += [c.cell_contents for c in (fn.__closure__ or []) if callable(c.cell_contents)]
-        fn = getattr(fn, "__wrapped__", None)
-    outside = [getattr(f, "__module__", "") or "" for f in found]
-    outside = [mod for mod in outside if not mod.startswith("transformers")]
-    return outside[0] if outside else "torch"
-
-
-def deltanet_kernels() -> dict:
-    from transformers.models.qwen3_5 import modeling_qwen3_5 as m
-
-    if hasattr(m, "is_fast_path_available"):  # transformers ≤ 5.12: one flag for all kernels
-        return {"fast_deltanet_kernels": bool(m.is_fast_path_available)}
-    impl = {name: _implementation(getattr(m, name, None)) for name in DELTANET_FUNCTIONS}
-    return {"fast_deltanet_kernels": all(v != "torch" for v in impl.values()), "deltanet_kernels": impl}
 
 
 def check_load(reader, info: dict) -> dict:
@@ -131,10 +110,14 @@ def check_decode(reader, tokenizer, prompts: list[list[int]], stop_ids: set[int]
             "pass": ref == ours, "warning": None if batch == single else "padded batch differs from single prompts"}
 
 
-def check_backward(model: ViLatent, n_layers: int) -> dict:
+def check_backward(model: ViLatent, n_layers: int, writer_layer_grad: bool = True) -> dict:
+    """``writer_layer_grad=False`` (9B on a 16 GB T4, smoke test only): the copied writer layers
+    get no gradient, which saves their fp32 gradients; the gradient still flows back through
+    every reader layer to the memory and the adapter."""
     model.reader.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.reader.train()
     model.writer.train()
+    model.writer.body.requires_grad_(writer_layer_grad)
     batch = [model.prepare(Example(f"g0-{i}", "g0", "qa", CONTEXT, question=q, answers=[a], target=a))
              for i, (q, a) in enumerate(QUESTIONS)]
     torch.cuda.reset_peak_memory_stats() if torch.cuda.is_available() else None
@@ -153,11 +136,11 @@ def check_backward(model: ViLatent, n_layers: int) -> dict:
 
     out = {"loss": float(loss), "memory_grad_ok": ok([m.grad for m in memories]),
            "adapter_grad_ok": ok([model.writer.adapter.weight.grad]),
-           "writer_layer0_grad_ok": ok([p.grad for p in first_layer]),
+           "writer_layer0_grad_ok": ok([p.grad for p in first_layer]) if writer_layer_grad else "not checked",
            "writer_layer_types": model.writer.layer_types,
            "step_seconds": seconds,
            "peak_mem_gb": torch.cuda.max_memory_allocated() / 2**30 if torch.cuda.is_available() else None}
-    out["pass"] = out["memory_grad_ok"] and out["adapter_grad_ok"] and out["writer_layer0_grad_ok"]
+    out["pass"] = out["memory_grad_ok"] and out["adapter_grad_ok"] and out["writer_layer0_grad_ok"] is not False
     model.writer.zero_grad(set_to_none=True)
     model.reader.eval()
     return out
@@ -197,10 +180,14 @@ def main():
     ap.add_argument("--n-layers", type=int, default=4)
     ap.add_argument("--out-dir", default="results/g0")
     ap.add_argument("--dtype", choices=list(DTYPES), default="bfloat16", help="float16 on GPUs without bf16 (T4)")
+    ap.add_argument("--quant", choices=list(QUANTS), default="none", help="int4 reader: T4 smoke test only")
+    ap.add_argument("--no-writer-layer-grad", action="store_true",
+                    help="skip the writer-layer gradients (9B on a 16 GB T4, smoke test only)")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
 
-    reader, tokenizer, info = load_reader(args.reader, dtype=args.dtype, return_loading_info=True)
+    reader, tokenizer, info = load_reader(args.reader, dtype=args.dtype, quant=args.quant,
+                                          return_loading_info=True)
     template = ReaderTemplate(load_reader_config(args.reader_config), tokenizer)
     writer = MemoryWriter(reader, tokenizer, n_layers=args.n_layers, ratio=4)
     model = ViLatent(reader, tokenizer, template, writer)
@@ -211,10 +198,11 @@ def main():
               "template": check_template(template, reader.config.model_type),
               "embeds": check_embeds(reader, prompts[0]),
               "decode": check_decode(reader, tokenizer, prompts, model.stop_ids),
-              "backward": check_backward(model, args.n_layers),
+              "backward": check_backward(model, args.n_layers, writer_layer_grad=not args.no_writer_layer_grad),
               "first_token": check_first_token(model, context_ids),
               "llmlingua2": check_llmlingua(tokenizer, template),
-              "dtype": args.dtype, "embedding_norm_mean": writer.emb_norm}
+              "dtype": args.dtype, "quant": args.quant, "embedding_norm_mean": writer.emb_norm,
+              "versions": {"torch": torch.__version__, "transformers": transformers.__version__}}
     report["G0_pass"] = all(v["pass"] for v in report.values() if isinstance(v, dict) and "pass" in v)
     out = Path(args.out_dir) / (args.reader.replace("/", "_") + ".json")
     out.parent.mkdir(parents=True, exist_ok=True)

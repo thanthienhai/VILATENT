@@ -20,7 +20,7 @@ from vilatent.baselines import build_baseline
 from vilatent.data import load_examples, write_jsonl
 from vilatent.evaluate import evaluate_text, evaluate_vilatent, summarize
 from vilatent.model import load_vilatent
-from vilatent.reader import DTYPES, load_reader
+from vilatent.reader import DTYPES, QUANTS, load_reader
 from vilatent.template import ReaderTemplate, load_reader_config
 
 
@@ -44,11 +44,12 @@ def main():
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--dtype", choices=list(DTYPES), default="bfloat16", help="float16 on GPUs without bf16 (T4)")
+    ap.add_argument("--quant", choices=list(QUANTS), default="none", help="int4 reader: T4 smoke test only")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    reader, tokenizer = load_reader(args.reader, dtype=args.dtype)
+    reader, tokenizer = load_reader(args.reader, dtype=args.dtype, quant=args.quant)
     template = ReaderTemplate(load_reader_config(args.reader_config), tokenizer)
     examples = load_examples(args.data, "qa", args.limit)
     for spec in args.methods:

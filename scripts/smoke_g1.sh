@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Smoke test of the whole G1 pipeline at toy scale (e.g. Kaggle 2× T4): every stage of
-# scripts/run_g1.sh runs once on a few hundred examples and ~10 optimizer steps, so that
+# scripts/run_g1.sh runs once on a few hundred examples and ~20 optimizer steps, so that
 # crashes, shape or path errors and NaN show up before GPU time is spent on G1.
 #
-# The numbers it produces are NOT G0/G1 evidence: tiny data, 10 steps, fp16 on T4. G0 runs and
+# The numbers it produces are NOT G0/G1 evidence: tiny data, 20 steps, fp16 on T4. G0 runs and
 # its report is kept, but a G0 failure does not stop the smoke test (G0 on T4 does not count).
 # qa_gen is skipped (the iCOMM endpoint is on a private network).
 #
@@ -13,6 +13,7 @@
 # Usage (repository root, GPU machine):
 #   bash scripts/smoke_g1.sh
 #   SMOKE_SHORT=1 bash scripts/smoke_g1.sh   # quicker: only checks that every stage runs
+#   QUANT=int4 SMOKE_9B=1 bash scripts/smoke_g1.sh   # int4 readers, plus G0 on the 9B (T4)
 set -euo pipefail
 
 for d in data runs results; do
@@ -22,12 +23,14 @@ for d in data runs results; do
   fi
 done
 
-# SMOKE_SHORT=1: a still smaller run (fewer documents, pairs and questions, 4 steps) and no G0,
+# SMOKE_SHORT=1: a still smaller run (fewer documents, pairs and questions, 16 steps) and no G0,
 # when the only question is whether every stage runs through.
 SMOKE_SHORT=${SMOKE_SHORT:-0}
 if [ "$SMOKE_SHORT" = 1 ]; then
   : "${N_WIKI:=150}" "${N_NEWS:=150}" "${N_PAIRS:=64}" "${N_DEV_PAIRS:=16}"
-  : "${TRAIN_ARGS:=--steps 4 --eval-every 2 --effective-batch 4 --micro-batch 2 --dev-limit 8}"
+  # 16 steps: in fp16 the GradScaler skips the first ~9 (overflow at its initial scale), and
+  # training fails when no step updated the writer
+  : "${TRAIN_ARGS:=--steps 16 --eval-every 8 --effective-batch 4 --micro-batch 2 --dev-limit 8}"
   : "${SMOKE_TRAIN_QA:=64}" "${SMOKE_DEV_QA:=24}" "${SKIP_G0:=1}"
 fi
 SKIP_G0=${SKIP_G0:-0}
@@ -35,8 +38,12 @@ SKIP_G0=${SKIP_G0:-0}
 export DTYPE=${DTYPE:-float16}
 export GPUS=${GPUS:-"0 1"}
 export N_WIKI=${N_WIKI:-300} N_NEWS=${N_NEWS:-300} N_PAIRS=${N_PAIRS:-400} N_DEV_PAIRS=${N_DEV_PAIRS:-40}
-export G0_READERS=${G0_READERS:-Qwen/Qwen3.5-2B}   # the 9B reader does not fit a 16 GB T4
-export TRAIN_ARGS=${TRAIN_ARGS:-"--steps 10 --eval-every 5 --effective-batch 8 --micro-batch 2 --dev-limit 20"}
+export QUANT=${QUANT:-none}   # int4 (bitsandbytes) makes the readers lighter; the 9B fits a T4 only in int4
+export G0_READERS=${G0_READERS:-Qwen/Qwen3.5-2B}   # the 9B reader does not fit a 16 GB T4 in fp16
+# SMOKE_9B=1 (with QUANT=int4): also G0 on the 9B, without the writer-layer gradients (with them
+# one forward + backward does not fit a 16 GB T4 even in int4)
+SMOKE_9B=${SMOKE_9B:-0}
+export TRAIN_ARGS=${TRAIN_ARGS:-"--steps 20 --eval-every 10 --effective-batch 8 --micro-batch 2 --dev-limit 20"}
 export EVAL_ARGS=${EVAL_ARGS:-"--batch-size 8"}
 SMOKE_TRAIN_QA=${SMOKE_TRAIN_QA:-400}   # ViQuAD train questions kept
 SMOKE_DEV_QA=${SMOKE_DEV_QA:-60}        # ViQuAD dev questions kept (whole passages come first in the file)
@@ -56,6 +63,9 @@ if [ "$SKIP_G0" = 1 ]; then
   log "G0 skipped"
 else
   $RUN g0 || log "G0 FAILED (kept in results/g0; on T4 this does not count, continuing)"
+  if [ "$SMOKE_9B" = 1 ]; then
+    G0_READERS=Qwen/Qwen3.5-9B G0_ARGS=--no-writer-layer-grad $RUN g0 || log "G0 9B FAILED (continuing)"
+  fi
 fi
 $RUN teacher stage1 stage2 eval select fallback report
 

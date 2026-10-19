@@ -18,21 +18,67 @@ import torch
 # Reader dtype. bfloat16 is the default (H100); GPUs without bf16 (T4) use float16. The writer
 # runs under autocast in the same dtype (writer.MemoryWriter).
 DTYPES = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
+# Reader weights: "none" (G0/G1) or "int4" (bitsandbytes NF4, computing in ``dtype``) to make the
+# Kaggle T4 smoke test lighter and fit the 9B reader. int4 numbers are never G0/G1 evidence.
+QUANTS = ("none", "int4")
 
 
 def load_reader(name: str, device: str = "cuda", dtype: torch.dtype | str = torch.bfloat16,
-                return_loading_info: bool = False):
+                quant: str = "none", return_loading_info: bool = False):
     """Frozen reader in eval mode. With ``return_loading_info`` also returns the missing and
     unexpected checkpoint keys (scripts/g0_check.py: no weight may stay randomly initialised)."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     dtype = DTYPES[dtype] if isinstance(dtype, str) else dtype
+    if quant not in QUANTS:
+        raise ValueError(f"quant must be one of {QUANTS}")
+    kwargs = {}
+    if quant == "int4":  # embeddings and lm_head stay in dtype; the decoder linear layers are NF4
+        from transformers import BitsAndBytesConfig
+
+        kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                                                           bnb_4bit_compute_dtype=dtype)
     tokenizer = AutoTokenizer.from_pretrained(name)
     model, info = AutoModelForCausalLM.from_pretrained(name, dtype=dtype, device_map=device,
-                                                       output_loading_info=True)
+                                                       output_loading_info=True, **kwargs)
     model.eval()
     model.requires_grad_(False)
     return (model, tokenizer, info) if return_loading_info else (model, tokenizer)
+
+
+# Gated DeltaNet kernels of Qwen3.5 (scripts/g0_check.py requires the fast ones).
+DELTANET_FUNCTIONS = ("torch_chunk_gated_delta_rule", "torch_recurrent_gated_delta_rule", "causal_conv1d_fn",
+                      "causal_conv1d_update")
+
+
+def _implementation(fn) -> str:
+    """Module of the function a transformers kernel wrapper calls: transformers ≥ 5.16 resolves
+    each kernel at import time (flash-linear-attention, causal-conv1d, else its torch code)."""
+    found = []
+    while fn is not None:
+        found += [c.cell_contents for c in (fn.__closure__ or []) if callable(c.cell_contents)]
+        fn = getattr(fn, "__wrapped__", None)
+    outside = [getattr(f, "__module__", "") or "" for f in found]
+    outside = [mod for mod in outside if not mod.startswith("transformers")]
+    return outside[0] if outside else "torch"
+
+
+def deltanet_kernels() -> dict:
+    from transformers.models.qwen3_5 import modeling_qwen3_5 as m
+
+    if hasattr(m, "is_fast_path_available"):  # transformers ≤ 5.12: one flag for all kernels
+        return {"fast_deltanet_kernels": bool(m.is_fast_path_available)}
+    impl = {name: _implementation(getattr(m, name, None)) for name in DELTANET_FUNCTIONS}
+    return {"fast_deltanet_kernels": all(v != "torch" for v in impl.values()), "deltanet_kernels": impl}
+
+
+def fast_delta_rule() -> bool:
+    """The chunked delta rule runs in flash-linear-attention. Its pure-torch fallback computes
+    the key l2norm in the input dtype, which overflows in fp16 at padded (zero) positions and
+    gives NaN gradients; bf16 and fp32 are not affected."""
+    kernels = deltanet_kernels()
+    chunk = kernels.get("deltanet_kernels", {}).get("torch_chunk_gated_delta_rule", "torch")
+    return kernels["fast_deltanet_kernels"] or chunk != "torch"
 
 
 def eos_ids(model, template_eos_id: int) -> set[int]:

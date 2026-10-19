@@ -110,6 +110,7 @@ def test_fallback_choice_and_accounting():
     chosen = choose_tau(me, full, target=0.75)  # needs 3/4 correct: re-read only the −2.0 answer
     assert chosen["fallback_rate"] == 0.25 and chosen["f1"] == 75
     assert chosen["confident_wrong_rate"] == 0.25  # the wrong answer at −0.05 is not caught
+    assert chosen["tau"] == (-2.0 + -0.2) / 2  # midpoint of the dev confidences around the cut
     combined = combine(me, full, chosen["tau"])
     assert [r["fallback"] for r in combined] == [False, True, False, False]
     assert [r["used_tokens"] for r in combined] == [25, 125, 25, 25]

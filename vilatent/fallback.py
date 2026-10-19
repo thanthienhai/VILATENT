@@ -46,8 +46,10 @@ def operating_point(rows: list[dict], full_f1: float) -> dict:
 
 
 def curve(me_rows: list[dict], full_rows: list[dict]) -> list[dict]:
-    """One point per distinct threshold, from no fallback (τ = −∞) to always (τ = +∞); the
-    same numbers as ``operating_point(combine(...))``, computed with arrays."""
+    """One point per distinct fallback set, from no fallback (τ = −∞) to always (τ = +∞); the
+    same numbers as ``operating_point(combine(...))``, computed with arrays. Every τ between two
+    consecutive dev confidences gives the same dev result; the midpoint is used, so test is not
+    biased towards re-reading more (or less) than dev."""
     pairs = _paired(me_rows, full_rows)
     conf = np.array([me["confidence"] for me, _ in pairs], dtype=float)
     f1_me = np.array([me["f1"] for me, _ in pairs])
@@ -56,7 +58,8 @@ def curve(me_rows: list[dict], full_rows: list[dict]) -> list[dict]:
     n_full = np.array([full["n_tokens"] for _, full in pairs], dtype=float)
     full_f1 = 100 * f1_full.mean()
     points = []
-    for t in [-math.inf] + sorted(set(conf.tolist())) + [math.inf]:
+    levels = sorted(set(conf.tolist()))
+    for t in [-math.inf] + [(a + b) / 2 for a, b in zip(levels, levels[1:])] + [math.inf]:
         back = conf < t
         f1 = 100 * np.where(back, f1_full, f1_me).mean()
         points.append({"tau": t, "f1": float(f1), "retention_vs_full": float(f1 / full_f1) if full_f1 else None,

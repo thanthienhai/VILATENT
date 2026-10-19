@@ -6,9 +6,10 @@ by ``budget.context_budget`` (the number of memory vectors of ViLatent at the sa
   truncation   keep the head of the context, cut at the k-th reader token
   lead         keep whole sentences from the start while they fit; never cut a sentence, so
                part of the budget may stay unused (reported as tokens actually used)
-  bm25         rank sentences by BM25 against the question, keep the best that fit, fill the
-               rest of the budget with the head of the best sentence that did not fit, restore
-               the original order
+  bm25         rank sentences by BM25 against the question, keep the best that fit (only those
+               sharing a syllable with the question, score > 0), fill the rest of the budget
+               with the head of the best sentence that did not fit (cut at a reader token),
+               restore the original order
   llmlingua2   LLMLingua-2 (xlm-roberta-large), its ``rate`` binary-searched to land in
                [0.97·k, k] reader tokens
   full, none   full context and no context (upper and lower references, no budget)
@@ -132,24 +133,29 @@ class BM25Sentences:
                     parts.append(partial[1])
             return " ".join(parts)
 
+        # sentences sharing no syllable with the question (score 0) are never packed whole: they
+        # would take the budget from the head of the best sentence that does not fit
         keep, best_rest = set(), None
         for i in order:
-            if counter.count(render(keep | {i})) <= budget:
+            if scores[i] > 0 and counter.count(render(keep | {i})) <= budget:
                 keep.add(i)
             elif best_rest is None:
                 best_rest = i
         if best_rest is None:
             return render(keep)
-        # fill: longest head of the best non-fitting sentence that keeps the total within budget
-        words = sentences[best_rest].split()
-        low, high = 0, len(words)
+        # fill: longest head of the best non-fitting sentence, cut at a reader token end (as
+        # truncation), that keeps the total within budget; a whole word such as "1010," may be
+        # several tokens, so cutting at words would leave budget unused
+        sentence = sentences[best_rest]
+        heads = [""] + [sentence[:end].rstrip() for _, end in counter.offsets(sentence)]
+        low, high = 0, len(heads) - 1
         while low < high:
             mid = (low + high + 1) // 2
-            if counter.count(render(keep, (best_rest, " ".join(words[:mid])))) <= budget:
+            if counter.count(render(keep, (best_rest, heads[mid]))) <= budget:
                 low = mid
             else:
                 high = mid - 1
-        return render(keep, (best_rest, " ".join(words[:low])))
+        return render(keep, (best_rest, heads[low]))
 
 
 class LLMLingua2:

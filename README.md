@@ -54,7 +54,7 @@ Python ≥ 3.10. Mỗi nhóm phụ thuộc là một extra:
 pip install -e ".[dev]"                          # lõi + test (CPU)
 pip install -e ".[model,data,baselines,teacher]" # reader, dữ liệu, LLMLingua-2, LLM thầy
 pip install -e ".[kernels]"                      # kernel Gated DeltaNet (Linux + CUDA), cần cho backward nhanh
-pytest -q                                        # 34 test, chạy trên CPU
+pytest -q                                        # 36 test, chạy trên CPU
 ```
 
 Qwen3.5 cần transformers có model type `qwen3_5` (đã thử với 5.12 và 5.16). Thiếu `flash-linear-attention` và
@@ -84,7 +84,7 @@ Những điểm `docs/VILATENT.md` chưa quy định, đã thống nhất với 
 | Token đầu khúc | Chèn token mồi (`<|endoftext|>` với Qwen, BOS với Vistral) vào đầu mỗi khúc rồi bỏ trạng thái ẩn của nó; mọi token nội dung đều được gộp |
 | Bộ ghi và khúc | Mỗi khúc chạy độc lập qua bộ ghi |
 | Ngân sách | k = Σ ceil(n_i / r), nhóm cuối của khúc có thể ít hơn r token; ⟨mem⟩ ⟨/mem⟩ không tính; mốc nén cứng nhận đúng k token reader |
-| Truncation, Lead-k, BM25 | Truncation giữ k token đầu. Lead-k chỉ giữ câu trọn vẹn, không lấp phần còn lại (nếu lấp thì trùng với Truncation). BM25 lấp phần còn lại bằng đầu của câu điểm cao nhất chưa vừa |
+| Truncation, Lead-k, BM25 | Truncation giữ k token đầu. Lead-k chỉ giữ câu trọn vẹn, không lấp phần còn lại (nếu lấp thì trùng với Truncation). BM25 chỉ giữ trọn câu có điểm > 0 (có âm tiết chung với câu hỏi), rồi lấp phần còn lại bằng đầu của câu điểm cao nhất chưa vừa, cắt theo token của reader như Truncation (quyết định 19/10/2026, sau rà soát: câu điểm 0 chiếm mất ngân sách của câu chứa đáp án; cắt theo từ bỏ trọn cả cụm như "1010,") |
 | ⟨mem⟩ ⟨/mem⟩ | Khởi tạo bằng embedding trung bình của token "«" và "»" |
 | Kiểu số | Trọng số huấn luyện fp32, tính bằng autocast bf16; reader bf16 |
 | Giai đoạn 1 | Wikipedia + BKAINewsCorpus 50 : 50; A dài 128–1.024 token (cắt ở cuối câu), B là 128 token tiếp theo; qua chat template ("Viết tiếp đoạn văn sau") |
@@ -95,9 +95,9 @@ Những điểm `docs/VILATENT.md` chưa quy định, đã thống nhất với 
 | Chỗ nối prompt | Dấu cách sau "Đoạn văn:" thuộc về khe ngữ cảnh (ngữ cảnh được tokenize thành " " + văn bản), nên prompt ghép từ các đoạn trùng với prompt tokenize liền một lượt (đã kiểm trên 1.175/1.175 câu dev) |
 | G0 | Bắt buộc có kernel flash-linear-attention và causal-conv1d (Qwen3.5); checkpoint không được thiếu key nào |
 | Back end | Chỉ HF transformers ở G0/G1 (không dùng vLLM), một vòng giải mã greedy cho mọi phương pháp |
-| Tiêu chí G1 | Trên ViQuAD dev ở 4×: chênh lệch F1 (ViLatent-ME trừ mốc cứng tốt nhất) ≥ 3 **và** cận dưới CI 95% bootstrap theo đoạn > 0 |
+| Tiêu chí G1 | Trên ViQuAD dev ở 4×: chênh lệch F1 (ViLatent-ME trừ mốc cứng tốt nhất) ≥ 3 **và** cận dưới CI 95% bootstrap theo đoạn > 0 **và** tỉ lệ không đọc được < 2% với ViLatent-ME và bốn mốc cứng (các phương pháp khác chỉ báo cáo). MDE in kèm tính cho kiểm định hai phía α = 0,05, power 80% |
 | Cơ chế đọc (sau tra cứu 16/10/2026) | Bộ ghi không thấy câu hỏi. ME: memory ở r·f + câu gốc BM25 nguyên văn ngay sau ⟨/mem⟩ (không nhãn) trong cùng k; giai đoạn 2 huấn luyện với câu gốc có sẵn. f ∈ {2, 4, 8} chọn theo loss dev, không theo F1 dev (tránh làm cổng lạc quan) |
-| Dự phòng MEF | Đọc lại toàn văn khi log-prob trung bình của câu trả lời ME < τ; τ là ngưỡng nhỏ nhất đạt ≥ 95% F1 toàn văn trên dev, cố định cho test; chi phí tính cả lần đọc memory đầu |
+| Dự phòng MEF | Đọc lại toàn văn khi log-prob trung bình của câu trả lời ME < τ; τ là ngưỡng nhỏ nhất đạt ≥ 95% F1 toàn văn trên dev, đặt ở điểm giữa hai độ tự tin liền kề trên dev (mọi τ trong khoảng đó cho cùng kết quả dev), cố định cho test; chi phí tính cả lần đọc memory đầu |
 | W5 | Bộ ghi thấy câu hỏi: [mồi][câu hỏi][khúc], bỏ trạng thái của mồi và câu hỏi, gộp như W0; dùng chung giai đoạn 1 với W0 ở cùng r |
 
 ## Kết quả

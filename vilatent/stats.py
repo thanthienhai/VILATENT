@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-Z = {0.05: 1.645, 0.025: 1.960, 0.01: 2.326}  # one-sided
+Z_TWO_SIDED = {0.05: 1.960, 0.01: 2.576}
 Z_POWER = {0.8: 0.842, 0.9: 1.282}
 
 
@@ -60,8 +60,9 @@ def paired_test(a, b, clusters: list, seeds: list | None = None, n_boot: int = 1
 
 
 def mde(se: float, alpha: float = 0.05, power: float = 0.8) -> float:
-    """Minimum detectable effect of a one-sided test, normal approximation."""
-    return (Z[alpha] + Z_POWER[power]) * se
+    """Minimum detectable effect of a two-sided test at level ``alpha`` (as the gates' 95% CI),
+    normal approximation."""
+    return (Z_TWO_SIDED[alpha] + Z_POWER[power]) * se
 
 
 def holm(p_values: dict[str, float]) -> dict[str, float]:

@@ -9,11 +9,15 @@ from __future__ import annotations
 
 from collections import Counter
 
-from .text import syllables
+from .text import normalize, syllables
+
+
+def _syllables(text: str) -> list[str]:
+    return syllables(normalize(text))  # NFC first: \w does not match NFD combining marks
 
 
 def qa_f1(prediction: str, reference: str) -> float:
-    p, r = syllables(prediction), syllables(reference)
+    p, r = _syllables(prediction), _syllables(reference)
     overlap = sum((Counter(p) & Counter(r)).values())
     if not overlap:
         return 0.0
@@ -22,7 +26,8 @@ def qa_f1(prediction: str, reference: str) -> float:
 
 
 def qa_em(prediction: str, reference: str) -> float:
-    return float(syllables(prediction) == syllables(reference))
+    r = _syllables(reference)
+    return float(bool(r) and _syllables(prediction) == r)  # an empty answer never matches
 
 
 def parse_answer(text: str) -> str:

@@ -1,3 +1,5 @@
+import unicodedata
+
 import numpy as np
 import torch
 
@@ -35,6 +37,10 @@ def test_qa_metrics():
     assert is_unreadable("<think>x", stopped=True) and is_unreadable("ok", stopped=False)
     assert not is_unreadable("ok", stopped=True)
     assert is_repetitive("a b c a b c a b c") and not is_repetitive("Hà Nội")
+    assert qa_em("", "…") == 0.0  # an empty answer never matches, even a gold made of punctuation
+    nfd = unicodedata.normalize("NFD", "Hà Nội")
+    assert qa_em(nfd, "Hà Nội") == 1.0 and qa_f1(nfd, "Hà Nội") == 1.0
+    assert abs(mde(1.0) - (1.960 + 0.842)) < 1e-9  # two-sided α = 0.05, as the gates' 95% CI
 
 
 def test_paired_test_and_clusters():

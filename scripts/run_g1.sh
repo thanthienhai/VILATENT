@@ -19,8 +19,10 @@ N_DEV_PAIRS=${N_DEV_PAIRS:-1000}
 N_WIKI=${N_WIKI:-200000}
 N_NEWS=${N_NEWS:-200000}
 DTYPE=${DTYPE:-bfloat16}        # float16 on GPUs without bf16 (T4)
+QUANT=${QUANT:-none}            # int4: lighter reader for the T4 smoke test only (never for G0/G1)
 GPUS=${GPUS:-0}                 # e.g. "0 1": independent runs go round-robin to these GPUs
 G0_READERS=${G0_READERS:-"$READER $READER_9B"}
+G0_ARGS=${G0_ARGS:-}            # extra scripts/g0_check.py arguments (smoke test, 9B on a T4)
 TRAIN_ARGS=${TRAIN_ARGS:-}      # extra scripts/train.py arguments (smoke test: --steps …)
 EVAL_ARGS=${EVAL_ARGS:-}        # extra scripts/evaluate.py arguments (smoke test: --batch-size …)
 EVAL_FILES="data/tasks/viquad_dev.jsonl data/tasks/viquad_test.jsonl"
@@ -31,6 +33,7 @@ export PYTHONIOENCODING=utf-8
 log() { echo "[$(date '+%F %T')] $*"; }
 
 # Run the given commands with one queue per GPU (command i goes to GPU i mod n); fails if any fails.
+# After a failure, the rest of that GPU's queue is skipped and each skipped command is logged.
 on_gpus() {
   local gpus=($GPUS) n g i pids=() status=0
   n=${#gpus[@]}
@@ -38,7 +41,10 @@ on_gpus() {
     (
       for ((i = g + 1; i <= $#; i += n)); do
         log "GPU ${gpus[$g]}: ${!i}"
-        CUDA_VISIBLE_DEVICES=${gpus[$g]} bash -c "${!i}"
+        if ! CUDA_VISIBLE_DEVICES=${gpus[$g]} bash -c "${!i}"; then
+          for ((i += n; i <= $#; i += n)); do log "GPU ${gpus[$g]}: skipped (an earlier run on this GPU failed): ${!i}"; done
+          exit 1
+        fi
       done
     ) &
     pids+=($!)
@@ -76,7 +82,8 @@ stage_template() {
 stage_g0() {
   for r in $G0_READERS; do
     log "G0 on $r"
-    python scripts/g0_check.py --reader "$r" --reader-config "$(reader_cfg "$r")" --dtype "$DTYPE"
+    python scripts/g0_check.py --reader "$r" --reader-config "$(reader_cfg "$r")" --dtype "$DTYPE" \
+      --quant "$QUANT" $G0_ARGS
   done
 }
 
@@ -84,8 +91,11 @@ stage_qa_gen() {
   log "auto-generated QA with the teacher, then the two-way check with $READER"
   python scripts/generate_qa.py --docs data/corpus/docs.jsonl --base-url "$TEACHER_URL" --model "$TEACHER_MODEL" \
     --out data/qa_gen/qa_raw.jsonl
-  python scripts/filter_qa.py --input data/qa_gen/qa_raw.jsonl --reader "$READER" --reader-config "$CFG" \
-    --eval-files $EVAL_FILES --out data/qa_gen/qa_clean.jsonl --dtype "$DTYPE"
+  local gpus=($GPUS)
+  local qa_gpu=${QA_GPU:-${gpus[${#gpus[@]} - 1]}}  # runs in the background: keep it off the GPUs of G1
+  log "two-way check on GPU $qa_gpu"
+  CUDA_VISIBLE_DEVICES=$qa_gpu python scripts/filter_qa.py --input data/qa_gen/qa_raw.jsonl --reader "$READER" \
+    --reader-config "$CFG" --eval-files $EVAL_FILES --out data/qa_gen/qa_clean.jsonl --dtype "$DTYPE" --quant "$QUANT"
 }
 
 stage_teacher() {
@@ -93,7 +103,7 @@ stage_teacher() {
   for pair in "data/stage1/pairs_train.jsonl continue pairs_train" "data/stage1/pairs_dev.jsonl continue pairs_dev" \
               "data/tasks/viquad_train_clean.jsonl qa viquad_train" "data/tasks/viquad_dev.jsonl qa viquad_dev"; do
     set -- $pair
-    jobs+=("python scripts/precompute_teacher.py --reader $READER --reader-config $CFG --data $1 --task $2 --out $TEACHER_DIR/$3.pt --dtype $DTYPE")
+    jobs+=("python scripts/precompute_teacher.py --reader $READER --reader-config $CFG --data $1 --task $2 --out $TEACHER_DIR/$3.pt --dtype $DTYPE --quant $QUANT")
   done
   log "teacher logits for the stage-1 pairs and ViQuAD train/dev"
   on_gpus "${jobs[@]}"
@@ -101,7 +111,7 @@ stage_teacher() {
 
 # Stage-1 writers: 4x (ViLatent-M, W5) and 8x/16x/32x (ViLatent-ME with f = 2, 4, 8 at a 4x budget).
 # The configs are written for RATIO=4.
-train_cmd() { echo "python scripts/train.py --config configs/g1/$1.yaml --dtype $DTYPE $TRAIN_ARGS"; }
+train_cmd() { echo "python scripts/train.py --config configs/g1/$1.yaml --dtype $DTYPE --quant $QUANT $TRAIN_ARGS"; }
 stage_stage1() {
   on_gpus "$(train_cmd stage1_r4)" "$(train_cmd stage1_r8)" "$(train_cmd stage1_r16)" "$(train_cmd stage1_r32)"
 }
@@ -114,7 +124,7 @@ stage_stage2() {
 stage_eval() {
   log "ViQuAD dev at ${RATIO}x: references, hard baselines, ViLatent-ME (f = 2, 4, 8), -M, W5"
   local eval="python scripts/evaluate.py --reader $READER --reader-config $CFG --data data/tasks/viquad_dev.jsonl"
-  eval+=" --ratios $RATIO --out-dir results/g1_dev --dtype $DTYPE $EVAL_ARGS --methods"
+  eval+=" --ratios $RATIO --out-dir results/g1_dev --dtype $DTYPE --quant $QUANT $EVAL_ARGS --methods"
   local ckpt="runs/g1_stage2_%s_r${RATIO}/best.pt" soft="" run
   for run in me_f2 me_f4 me_f8 m w5; do soft+=" vilatent:$(printf "$ckpt" "$run")"; done
   on_gpus "$eval full none truncation lead bm25 llmlingua2" "$eval$soft"
