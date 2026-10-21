@@ -5,7 +5,9 @@
 #
 # The numbers it produces are NOT G0/G1 evidence: tiny data, 20 steps, fp16 on T4. G0 runs and
 # its report is kept, but a G0 failure does not stop the smoke test (G0 on T4 does not count).
-# qa_generate and qa_filter are skipped (the iCOMM endpoint is on a private network; G1 does not use them).
+# qa_generate is skipped (the iCOMM endpoint is on a private network). With SMOKE_QA=1, the
+# auto-generated QA is fetched from the Hub (qa_download, needs an HF_TOKEN that can read the
+# private QA_REPO) and its first SMOKE_QA_ROWS rows go through qa_filter; G1 does not use them.
 #
 # It writes data/, runs/ and results/ like the real pipeline, so it refuses to start where
 # they already exist: run it in a fresh copy of the repository.
@@ -14,6 +16,7 @@
 #   bash scripts/smoke_g1.sh
 #   SMOKE_SHORT=1 bash scripts/smoke_g1.sh   # quicker: only checks that every stage runs
 #   QUANT=int4 SMOKE_9B=1 bash scripts/smoke_g1.sh   # int4 readers, plus G0 on the 9B (T4)
+#   SMOKE_QA=1 HF_TOKEN=... bash scripts/smoke_g1.sh # also qa_download + qa_filter
 set -euo pipefail
 
 for d in data runs results; do
@@ -47,6 +50,8 @@ export TRAIN_ARGS=${TRAIN_ARGS:-"--steps 20 --eval-every 10 --effective-batch 8 
 export EVAL_ARGS=${EVAL_ARGS:-"--batch-size 8"}
 SMOKE_TRAIN_QA=${SMOKE_TRAIN_QA:-400}   # ViQuAD train questions kept
 SMOKE_DEV_QA=${SMOKE_DEV_QA:-60}        # ViQuAD dev questions kept (whole passages come first in the file)
+SMOKE_QA=${SMOKE_QA:-0}
+SMOKE_QA_ROWS=${SMOKE_QA_ROWS:-500}     # auto-generated questions sent through qa_filter
 RUN="bash scripts/run_g1.sh"
 
 log() { echo "[$(date '+%F %T')] smoke: $*"; }
@@ -68,5 +73,13 @@ else
   fi
 fi
 $RUN teacher stage1 stage2 eval select fallback report
+if [ "$SMOKE_QA" = 1 ]; then
+  $RUN qa_download
+  log "shrink the auto-generated QA to its first $SMOKE_QA_ROWS rows"
+  head -n "$SMOKE_QA_ROWS" data/qa_gen/qa_raw.jsonl > data/qa_gen/qa_raw.small && mv data/qa_gen/qa_raw.small data/qa_gen/qa_raw.jsonl
+  $RUN qa_filter
+else
+  log "qa_download and qa_filter skipped (SMOKE_QA=1 runs them)"
+fi
 
-log "done; G0 report(s) in results/g0, G1 pipeline output in results/g1_dev"
+log "done; G0 report(s) in results/g0, G1 pipeline output in results/g1_dev, filtered QA in data/qa_gen"

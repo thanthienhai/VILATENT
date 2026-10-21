@@ -45,7 +45,7 @@ pip install -e ".[dev,model,data,baselines,teacher]" "transformers==5.16.1" flas
 TORCH_CUDA_ARCH_LIST=9.0 MAX_JOBS=8 pip install --no-build-isolation causal-conv1d
 python -c "import torch, transformers, fla, causal_conv1d; print(torch.__version__, transformers.__version__, torch.cuda.is_available())"
 pytest -q                                   # 39 passed (chạy trên CPU)
-export HF_TOKEN=...                         # không bắt buộc (Qwen3.5 không gated), nhưng tránh bị giới hạn tốc độ tải
+export HF_TOKEN=...                         # không bắt buộc cho G0/G1 (Qwen3.5 không gated), nhưng tránh bị giới hạn tốc độ tải
 mkdir -p logs
 ```
 
@@ -229,6 +229,8 @@ chỉ dùng để thử đường chạy, không dùng làm bằng chứng cho G
 | `DTYPE` | `bfloat16` | `float16` chỉ dùng cho GPU không có bf16 |
 | `READER`, `READER_9B`, `SLUG`, `RATIO` | `Qwen/Qwen3.5-2B`, `Qwen/Qwen3.5-9B`, `qwen3.5-2b`, `4` | không đổi cho G0 và G1 |
 | `TEACHER_URL`, `TEACHER_MODEL` | endpoint iCOMM 27B | chỉ dùng cho `qa_generate`, chạy ngoài cụm |
+| `QA_REPO`, `QA_REVISION` | `thanthienhai/vilatent-qa-gen`, `28e3ac26…` | repo HF private chứa QA sinh tự động, cho `qa_download` ở G2 (tuần 4–6). Cần `HF_TOKEN` có quyền đọc repo này; G0/G1 không dùng |
+| `SMOKE_QA`, `SMOKE_QA_ROWS` | `0`, `500` | `SMOKE_QA=1`: `smoke_g1.sh` chạy thêm `qa_download` và `qa_filter` trên 500 câu đầu (cần `HF_TOKEN` như trên). Không cần cho G0/G1 |
 | `N_PAIRS`, `N_DEV_PAIRS`, `N_WIKI`, `N_NEWS` | 96.000, 1.000, 200.000, 200.000 | cỡ dữ liệu giai đoạn 1; giữ mặc định |
 | `G0_READERS` | cả hai reader | reader được kiểm tra ở G0 (mục 3) |
 | `TRAIN_ARGS`, `EVAL_ARGS` | rỗng | dành cho `scripts/smoke_g1.sh`. Ngoài lượt thử, `TRAIN_ARGS` chỉ dùng để giảm micro-batch khi thiếu bộ nhớ |
