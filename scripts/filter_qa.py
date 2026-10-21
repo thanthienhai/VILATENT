@@ -4,7 +4,9 @@
 2. Rules (survey of 21/10/2026): drop a question that contains its answer (as whole syllables,
    e.g. "Đoạn văn đề cập đến loài cây nào?" -> "cây"), and a "number" question whose answer
    has no digit, number word or Roman numeral (the teacher labels "ATP" or "thời trung cổ"
-   as numbers).
+   as numbers). Survey of the full prompt-3 run: also drop a question that names "đoạn văn"
+   ("Nhân vật chính trong đoạn văn là ai?"): 4.5% of the generated questions, 2 in ViQuAD
+   train, and the source of most questions repeated across paragraphs.
 3. Two-way check: keep a question only when the reader, reading the full paragraph with the
    fixed template, answers it with F1 ≥ 0.8 (syllable F1 against the teacher's verbatim answer).
 4. Copy share: a question is a copy when ≥ 80% of its syllables are in the sentence that holds
@@ -43,6 +45,8 @@ def rule_reject(row: dict) -> str | None:
         return "answer_in_question"
     if row["answer_type"] == "number" and not has_number(answer):
         return "number_without_number"
+    if contains_syllables(row["question"], "đoạn văn"):
+        return "mentions_paragraph"
     return None
 
 

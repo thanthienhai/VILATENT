@@ -3,10 +3,9 @@
 #   bash scripts/run_g1.sh data template g0          # week 1–2
 #   bash scripts/run_g1.sh teacher stage1 stage2 eval select fallback report   # week 3
 # Auto-generated QA (not used by G1; for weeks 4–6). The GPU cluster cannot reach the teacher
-# endpoint, so it runs in two places:
-#   bash scripts/run_g1.sh qa_generate   # machine inside the iCOMM network, CPU only; needs
-#                                        # data/corpus/docs.jsonl copied from the cluster
-#   bash scripts/run_g1.sh qa_filter     # GPU cluster, once data/qa_gen/qa_raw.jsonl is copied back
+# endpoint, so generation runs elsewhere and its output is published on the Hugging Face Hub:
+#   bash scripts/run_g1.sh qa_generate               # machine inside the iCOMM network, CPU only
+#   bash scripts/run_g1.sh qa_download qa_filter     # GPU cluster; needs an HF_TOKEN that can read QA_REPO
 # Each stage reads only the files written by the previous ones.
 # Independent runs (teacher files, stage 1, stage 2, evaluation) are spread over the GPUs in GPUS.
 # The size variables below exist for scripts/smoke_g1.sh; leave them at their defaults for G1.
@@ -18,6 +17,8 @@ SLUG=${SLUG:-qwen3.5-2b}
 RATIO=${RATIO:-4}
 TEACHER_URL=${TEACHER_URL:-http://172.16.9.11:30049/v1}
 TEACHER_MODEL=${TEACHER_MODEL:-icmodel/icom-model-llm-ic-v3.8-27b}
+QA_REPO=${QA_REPO:-thanthienhai/vilatent-qa-gen}   # private dataset repo with qa_raw.jsonl and its meta
+QA_REVISION=${QA_REVISION:-28e3ac26c3d0289d4b38b7366f6df3b8d08a937b}  # prompt 3, 19,983 paragraphs (21/10/2026)
 N_PAIRS=${N_PAIRS:-96000}
 N_DEV_PAIRS=${N_DEV_PAIRS:-1000}
 N_WIKI=${N_WIKI:-200000}
@@ -95,6 +96,14 @@ stage_qa_generate() {
   log "auto-generated QA with the teacher at $TEACHER_URL (no GPU)"
   python scripts/generate_qa.py --docs data/corpus/docs.jsonl --base-url "$TEACHER_URL" --model "$TEACHER_MODEL" \
     --out data/qa_gen/qa_raw.jsonl
+}
+
+stage_qa_download() {
+  log "auto-generated QA from $QA_REPO at revision $QA_REVISION"
+  hf download "$QA_REPO" qa_raw.jsonl qa_raw.jsonl.meta.json --repo-type dataset --revision "$QA_REVISION"     --local-dir data/qa_gen
+  python -c 'import json, sys; from vilatent.data import sha256_file
+meta = json.load(open("data/qa_gen/qa_raw.jsonl.meta.json", encoding="utf-8"))
+sys.exit(0 if sha256_file("data/qa_gen/qa_raw.jsonl") == meta["sha256"] else "qa_raw.jsonl does not match its meta sha256")'
 }
 
 stage_qa_filter() {

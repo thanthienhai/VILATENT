@@ -67,7 +67,7 @@ này. Trên Windows, đặt `PYTHONIOENCODING=utf-8` để in được tiếng V
 bash scripts/run_g1.sh data template g0                  # tuần 1–2: dữ liệu, template, cổng G0
 bash scripts/run_g1.sh teacher stage1 stage2 eval select fallback report  # tuần 3: cổng G1
 bash scripts/run_g1.sh qa_generate                        # QA sinh tự động (iCOMM 27B): máy trong mạng iCOMM, chỉ CPU
-bash scripts/run_g1.sh qa_filter                          # kiểm tra hai chiều trên cụm GPU (tuần 4–6)
+bash scripts/run_g1.sh qa_download qa_filter              # cụm GPU (tuần 4–6): tải QA từ HF (repo private, cần HF_TOKEN), kiểm tra hai chiều
 bash scripts/smoke_g1.sh                                  # thử nhanh cả luồng ở quy mô nhỏ (vd. Kaggle 2× T4)
 ```
 
@@ -90,7 +90,7 @@ Những điểm `docs/VILATENT.md` chưa quy định, đã thống nhất với 
 | Kiểu số | Trọng số huấn luyện fp32, tính bằng autocast bf16; reader bf16 |
 | Giai đoạn 1 | Wikipedia + BKAINewsCorpus 50 : 50; A dài 128–1.024 token (cắt ở cuối câu), B là 128 token tiếp theo; qua chat template ("Viết tiếp đoạn văn sau") |
 | Prompt | Không dùng system prompt cho mọi reader; chỉ dẫn QA lấy nguyên văn từ ViWord-C |
-| QA sinh tự động | Đáp án phải là span nguyên văn, trọn cụm (số và thực thể ≤ 15 âm tiết, mô tả ≤ 30); câu hỏi loại số chỉ được xin khi đoạn văn có số; giữ khi reader đọc đầy đủ đạt F1 ≥ 0,8. Loại câu chứa đáp án và câu nhãn "số" mà đáp án không có số; câu hỏi chép câu chứa đáp án (≥ 80% âm tiết trùng) được lấy mẫu về đúng tỉ lệ của ViQuAD train (khoảng 10%) (quyết định 21/10/2026, sau khảo sát prompt đầu: tỉ lệ này là 25%) |
+| QA sinh tự động | Đáp án phải là span nguyên văn, trọn cụm (số và thực thể ≤ 15 âm tiết, mô tả ≤ 30); câu hỏi loại số chỉ được xin khi đoạn văn có số; giữ khi reader đọc đầy đủ đạt F1 ≥ 0,8. Loại câu chứa đáp án, câu nhãn "số" mà đáp án không có số và câu hỏi nhắc "đoạn văn" (4,5% câu sinh, ViQuAD gần như không có; thêm 21/10/2026 sau khi chạy đủ); câu hỏi chép câu chứa đáp án (≥ 80% âm tiết trùng) được lấy mẫu về đúng tỉ lệ của ViQuAD train (khoảng 10%) (quyết định 21/10/2026, sau khảo sát prompt đầu: tỉ lệ này là 25%) |
 | Huấn luyện | AdamW, weight decay 0, cắt chuẩn gradient 1,0, warmup 3% rồi giảm tuyến tính về 0 |
 | Không đọc được | Có `<think>` hoặc không kết thúc lượt trong `max_new_tokens`. QA dùng 128 token: với tokenizer Qwen3.5, 10% đáp án vàng của dev cần hơn 32 token, nhưng không đáp án nào cần hơn 128 |
 | Chỗ nối prompt | Dấu cách sau "Đoạn văn:" thuộc về khe ngữ cảnh (ngữ cảnh được tokenize thành " " + văn bản), nên prompt ghép từ các đoạn trùng với prompt tokenize liền một lượt (đã kiểm trên 1.175/1.175 câu dev) |

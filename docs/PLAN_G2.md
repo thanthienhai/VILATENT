@@ -38,7 +38,7 @@ Hai việc G2 **không** quyết định:
 | Số lớp L | `n_layers` là tham số của config; L = 8 chỉ cần file YAML mới (L phải là bội số của 4) |
 | O-none | `init_from` để trống thì giai đoạn 2 bắt đầu từ bộ ghi mới |
 | MDE, bootstrap cụm, Holm | `vilatent/stats.py` (`mde`, `paired_test`, `holm`) |
-| Sinh và lọc QA | `scripts/generate_qa.py`, `scripts/filter_qa.py`. Ngày 21/10/2026 đã chạy thử prompt đầu trên 2.090 đoạn (5.917 câu, giữ ở `data/qa_gen/qa_raw_prompt1.jsonl`); sau khảo sát, prompt được sửa và `filter_qa.py` thêm luật lọc, lấy mẫu câu chép (D1). `filter_qa.py` chưa chạy trên GPU |
+| Sinh và lọc QA | `scripts/generate_qa.py`, `scripts/filter_qa.py`. Ngày 21/10/2026 đã chạy thử prompt đầu trên 2.090 đoạn (5.917 câu, giữ ở `data/qa_gen/qa_raw_prompt1.jsonl`); sau khảo sát, prompt được sửa và `filter_qa.py` thêm luật lọc, lấy mẫu câu chép (D1). Ngày 21/10/2026 đã sinh đủ với prompt 3 (19.983 đoạn, 55.480 câu), đẩy lên HF `thanthienhai/vilatent-qa-gen` (private). `filter_qa.py` chưa chạy trên GPU |
 | Chống rò rỉ | `scripts/leak_filter.py`, sidecar `.meta.json` |
 | Huấn luyện, đánh giá QA, chọn theo loss dev | Dùng chung với G1 |
 
@@ -47,8 +47,10 @@ Hai việc G2 **không** quyết định:
 ### Dữ liệu
 
 **D1. QA sinh tự động.** Cụm GPU không gọi được endpoint iCOMM, nên chia làm hai nơi:
-`bash scripts/run_g1.sh qa_generate` chạy ở một máy trong mạng iCOMM (chỉ cần CPU và `data/corpus/docs.jsonl` lấy từ
-cụm sau bước `data`), rồi chép `data/qa_gen/qa_raw.jsonl` về cụm và chạy `bash scripts/run_g1.sh qa_filter`.
+`bash scripts/run_g1.sh qa_generate` chạy ở một máy trong mạng iCOMM (chỉ cần CPU và `data/corpus/docs.jsonl`).
+`qa_raw.jsonl` và file meta được đẩy lên repo dataset private `thanthienhai/vilatent-qa-gen` trên Hugging Face. Trên
+cụm: `HF_TOKEN=<token đọc được repo> bash scripts/run_g1.sh qa_download qa_filter`. `qa_download` tải đúng revision
+`QA_REVISION` (mặc định `28e3ac26`, bản prompt 3) và dừng nếu SHA-256 không khớp file meta.
 
 Endpoint `http://172.16.9.11:30049/v1` đo ngày 21/10/2026: khoảng 1,85 request/s, bão hoà từ 16 luồng, nên 20.000
 đoạn mất khoảng 3 giờ. Khảo sát 5.917 câu của prompt đầu (so với ViQuAD dev):
@@ -78,6 +80,13 @@ Hai lượt thử 150 đoạn (cùng đoạn văn, so với prompt đầu):
 Prompt 3 là bản dùng để chạy đủ. Chỉ 7/150 đoạn không có số, nên phần lớn câu "số" sai nhãn vẫn còn và được
 `filter_qa.py` loại. Đáp án mô tả dài hơn làm bước kiểm tra hai chiều (F1 ≥ 0,8) khó đạt hơn: cần xem tỉ lệ bị loại
 theo loại đáp án.
+
+Chạy đủ với prompt 3 (21/10/2026, 3 giờ 17 phút, không lượt gọi nào lỗi): 19.983 đoạn, 55.480 câu (số / thực thể /
+mô tả: 16.050 / 19.952 / 19.478), 6 đoạn không ra câu. Đáp án phân vị 25/50/75 là 2/4/9 âm tiết, 8,2% dài hơn 15
+(mô tả: trung vị 11, 23,3% dài hơn 15). Câu chép 10,9%, sát ViQuAD train. Khảo sát này thấy thêm 4,5% câu hỏi nhắc
+"đoạn văn" ("Nhân vật chính trong đoạn văn là ai?"), ViQuAD train chỉ có 2 câu; đây cũng là nguồn chính của các câu hỏi
+lặp lại giữa các đoạn. `filter_qa.py` thêm luật loại thứ ba cho các câu này. Ba luật loại 5,8% (2.365 câu "đoạn văn",
+685 nhãn "số" không có số, 184 câu chứa đáp án), còn 52.246 câu trước bước kiểm tra hai chiều.
 
 Sau khi lọc:
 

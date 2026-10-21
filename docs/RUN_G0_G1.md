@@ -115,12 +115,11 @@ Khi một reader không đạt, `g0_check.py` trả về exit 1 và `run_g1.sh` 
 **G0 không đạt: Dừng.** Gửi `results/g0/*.json` cùng `logs/g0.log`. Phương án dự phòng (Qwen2.5-1.5B và 7B với
 L = 2) chỉ được dùng khi chủ đề tài đồng ý.
 
-### Sau bước `data`: gửi corpus cho việc sinh QA
+### QA sinh tự động: không làm trong G0/G1
 
-QA sinh tự động (dành cho tuần 4–6, G1 **không** dùng) cần endpoint iCOMM, mà cụm không gọi được. Vì vậy **không chạy
-`qa_generate` hay `qa_filter` trên cụm** trong G0/G1. Chỉ cần làm một việc: khi bước `data` xong, gửi cho chủ đề tài
-`data/corpus/docs.jsonl` và `data/corpus/docs.jsonl.meta.json`. Chủ đề tài sẽ sinh câu hỏi ở một máy trong mạng
-iCOMM; bước lọc chạy trên cụm ở tuần 4–6, theo hướng dẫn riêng của G2.
+QA sinh tự động dành cho tuần 4–6; G1 **không** dùng. Câu hỏi đã được sinh ở ngoài cụm và đẩy lên repo Hugging Face
+private `thanthienhai/vilatent-qa-gen`. Vì vậy **không chạy `qa_generate`, `qa_download` hay `qa_filter`** trong
+G0/G1, và không cần gửi corpus đi. Bước lọc chạy trên cụm ở tuần 4–6, theo hướng dẫn riêng của G2.
 
 ## 4. Tuần 3: G1 trên Qwen3.5-2B ở 4×
 
