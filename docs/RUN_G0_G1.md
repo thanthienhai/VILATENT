@@ -4,11 +4,11 @@ Tài liệu này dành cho người chạy máy GPU. Mục tiêu là chạy hai 
 §Cổng quyết định và lộ trình) và gửi kết quả về cho chủ đề tài. Người chạy không cần hiểu phương pháp. Chỉ cần làm
 đúng thứ tự, kiểm tra kết quả theo từng bảng và dừng lại ở những chỗ ghi **Dừng**.
 
-- **G0, tuần 1–2:** kiểm tra hạ tầng Qwen3.5 (đọc `inputs_embeds`, lan truyền ngược qua Gated DeltaNet, giải mã)
+- **G0:** kiểm tra hạ tầng Qwen3.5 (đọc `inputs_embeds`, lan truyền ngược qua Gated DeltaNet, giải mã)
   trên Qwen3.5-2B và 9B.
-- **G1, tuần 3:** huấn luyện bộ ghi trên Qwen3.5-2B và so với các mốc nén cứng trên ViQuAD dev ở tỉ lệ nén 4×.
+- **G1:** huấn luyện bộ ghi trên Qwen3.5-2B và so với các mốc nén cứng trên ViQuAD dev ở tỉ lệ nén 4×.
   Chỉ chạy G1 khi G0 đạt.
-- **Sau G1:** lọc bộ QA sinh tự động (dữ liệu cho tuần 4–6) bằng Qwen3.5-2B, khoảng 1 giờ.
+- **Sau G1:** lọc bộ QA sinh tự động bằng Qwen3.5-2B, khoảng 1 giờ.
 
 Nguyên tắc chung:
 
@@ -81,7 +81,7 @@ Dòng `G1: FAIL` ở cuối bảng là **bình thường**: với 16 bước, b�
 the reader` sau khối JSON của QA cũng không phải lỗi. Số liệu của lượt thử không có
 giá trị làm bằng chứng. Nếu lệnh dừng với lỗi: **Dừng**, gửi `logs/smoke.log`. Chạy xong thì xoá `../VILATENT-smoke`.
 
-## 3. Tuần 1–2: dữ liệu, template, G0
+## 3. Dữ liệu, template, G0
 
 ```bash
 bash scripts/run_g1.sh data template g0 2>&1 | tee -a logs/g0.log
@@ -125,7 +125,7 @@ L = 2) chỉ được dùng khi chủ đề tài đồng ý.
 Không chạy `qa_generate` trên cụm: câu hỏi đã được sinh ở ngoài cụm (cụm không gọi được endpoint iCOMM). Không cần
 gửi corpus đi.
 
-## 4. Tuần 3: G1 trên Qwen3.5-2B ở 4×
+## 4. G1 trên Qwen3.5-2B ở 4×
 
 Chỉ chạy khi cả hai file G0 có `G0_pass: true`.
 
@@ -160,9 +160,8 @@ tail -n 3 runs/*/metrics.jsonl
 - Dòng `end` ghi `best_dev_loss` và số giờ đã chạy.
 
 **Báo sớm thời gian chạy.** Khoảng 30 phút sau khi `stage1` bắt đầu, gửi `sec_per_step` và `peak_mem_gb` của từng
-lượt đang chạy. Số giờ H100 của G1 ≈ `sec_per_step` × số bước, cộng dồn qua 9 lượt. Tài liệu đề tài yêu cầu đo lại
-con số này. Nếu quá ngân sách GPU, chủ đề tài sẽ quyết định cắt lượt nào (thứ tự ưu tiên: ba lượt ME là bắt buộc;
-W5 có thể dời sang tuần 4–6; f = 8 có thể bỏ).
+lượt đang chạy. Số giờ H100 của G1 ≈ `sec_per_step` × số bước, cộng dồn qua 9 lượt. Không tự cắt lượt nào: nếu quá
+ngân sách GPU, chủ đề tài sẽ báo lượt cần bỏ.
 
 Ở bước đầu tiên, vòng huấn luyện tự kiểm tra gradient về bộ ghi và dừng với lỗi nếu gradient không hữu hạn hoặc bằng
 0. Các cảnh báo sau là bình thường và có thể bỏ qua:
@@ -189,13 +188,12 @@ Trên ViQuAD dev ở 4×, G1 đạt khi thoả cả ba điều kiện:
 Kết quả nằm ở `G1_pass` trong `results/g1_dev/g1_report_r4.json`, và ở dòng `G1: PASS` hoặc `G1: FAIL` cuối log.
 Người chạy không cần diễn giải kết quả. Chỉ cần gửi về.
 
-**G1 không đạt:** chỉ chạy thêm mục 5 (lọc QA), rồi gửi kết quả. Chủ đề tài sẽ quyết định thử W2 hay chuyển sang Hướng B
-(`docs/VILATENT.md`). Không chạy reader 9B khi chưa qua G1.
+**G1 không đạt:** chỉ chạy thêm mục 5 (lọc QA), rồi gửi kết quả và chờ chủ đề tài báo bước tiếp theo. Không chạy
+reader 9B khi chưa qua G1.
 
 ## 5. Sau G1: lọc QA sinh tự động (khoảng 1 giờ)
 
-G1 không dùng bộ QA này; nó là dữ liệu huấn luyện cho tuần 4–6. Lọc ngay sau G1 để chủ đề tài biết sớm tỉ lệ bị loại
-khi lập kế hoạch cho tuần 4–6. Chạy sau khi G1 xong, dù G1 đạt hay không:
+G1 không dùng bộ QA này. Chạy sau khi G1 xong, dù G1 đạt hay không:
 
 ```bash
 bash scripts/run_g1.sh qa_download qa_filter 2>&1 | tee -a logs/qa_filter.log
@@ -220,8 +218,8 @@ Gói này nhỏ (vài MB) và đã gồm thống kê lọc QA (`data/qa_gen/qa_c
 - Kết quả của `git rev-parse HEAD` và `pip freeze`.
 - Kết quả của `nvidia-smi --query-gpu=name,memory.total --format=csv`.
 
-Giữ lại trên máy chạy (không xoá) `runs/*/best.pt` và `data/` (kể cả `data/qa_gen/qa_clean.jsonl`), vì tuần 4–6 dùng lại chúng. Chỉ gửi đi khi được yêu
-cầu, vì dung lượng khoảng chục GB.
+Giữ lại trên máy chạy (không xoá) `runs/*/best.pt` và `data/` (kể cả `data/qa_gen/qa_clean.jsonl`), vì các bước
+sau dùng lại chúng. Chỉ gửi đi khi được yêu cầu, vì dung lượng khoảng chục GB.
 
 ## 7. Sự cố thường gặp
 
