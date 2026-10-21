@@ -67,7 +67,7 @@ này. Trên Windows, đặt `PYTHONIOENCODING=utf-8` để in được tiếng V
 bash scripts/run_g1.sh data template g0                  # tuần 1–2: dữ liệu, template, cổng G0
 bash scripts/run_g1.sh teacher stage1 stage2 eval select fallback report  # tuần 3: cổng G1
 bash scripts/run_g1.sh qa_generate                        # QA sinh tự động (iCOMM 27B): máy trong mạng iCOMM, chỉ CPU
-bash scripts/run_g1.sh qa_download qa_filter              # cụm GPU (tuần 4–6): tải QA từ HF (repo private, cần HF_TOKEN), kiểm tra hai chiều
+bash scripts/run_g1.sh qa_download qa_filter              # cụm GPU, ngay sau G1: tải QA từ HF (repo private, cần HF_TOKEN), kiểm tra hai chiều
 bash scripts/smoke_g1.sh                                  # thử nhanh cả luồng ở quy mô nhỏ (vd. Kaggle 2× T4)
 ```
 

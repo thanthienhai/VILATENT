@@ -49,7 +49,7 @@ Hai việc G2 **không** quyết định:
 **D1. QA sinh tự động.** Cụm GPU không gọi được endpoint iCOMM, nên chia làm hai nơi:
 `bash scripts/run_g1.sh qa_generate` chạy ở một máy trong mạng iCOMM (chỉ cần CPU và `data/corpus/docs.jsonl`).
 `qa_raw.jsonl` và file meta được đẩy lên repo dataset private `thanthienhai/vilatent-qa-gen` trên Hugging Face. Trên
-cụm: `HF_TOKEN=<token đọc được repo> bash scripts/run_g1.sh qa_download qa_filter`. `qa_download` tải đúng revision
+cụm, ngay sau G1 (`docs/RUN_G0_G1.md` mục 5): `HF_TOKEN=<token đọc được repo> bash scripts/run_g1.sh qa_download qa_filter`. `qa_download` tải đúng revision
 `QA_REVISION` (mặc định `28e3ac26`, bản prompt 3) và dừng nếu SHA-256 không khớp file meta.
 
 Endpoint `http://172.16.9.11:30049/v1` đo ngày 21/10/2026: khoảng 1,85 request/s, bão hoà từ 16 luồng, nên 20.000

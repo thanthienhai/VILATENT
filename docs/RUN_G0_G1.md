@@ -8,6 +8,7 @@ Tài liệu này dành cho người chạy máy GPU. Mục tiêu là chạy hai 
   trên Qwen3.5-2B và 9B.
 - **G1, tuần 3:** huấn luyện bộ ghi trên Qwen3.5-2B và so với các mốc nén cứng trên ViQuAD dev ở tỉ lệ nén 4×.
   Chỉ chạy G1 khi G0 đạt.
+- **Sau G1:** lọc bộ QA sinh tự động (dữ liệu cho tuần 4–6) bằng Qwen3.5-2B, khoảng 1 giờ.
 
 Nguyên tắc chung:
 
@@ -26,7 +27,7 @@ Nguyên tắc chung:
 | Hệ điều hành | Linux, có CUDA toolkit (`nvcc`) khớp với bản CUDA của torch, để build `causal-conv1d` |
 | Đĩa | Nên có ≥ 100 GB trống (ước lượng): bộ nhớ đệm Hugging Face khoảng 30 GB (Qwen3.5-2B và 9B, xlm-roberta-large của LLMLingua-2, Wikipedia tiếng Việt); `data/` vài GB (logit thầy của cặp giai đoạn 1 khoảng 1,5 GB); `runs/` khoảng 1 GB mỗi checkpoint × 9 |
 | RAM | ≥ 32 GB |
-| Mạng | Truy cập được Hugging Face Hub (mô hình và dataset). Không cần endpoint iCOMM: G0 và G1 không gọi nó |
+| Mạng | Truy cập được Hugging Face Hub (mô hình và dataset, kể cả repo private `thanthienhai/vilatent-qa-gen` ở mục 5). Không cần endpoint iCOMM: cụm không gọi nó |
 
 Môi trường đã chạy thử toàn bộ luồng (Kaggle, 2× T4, fp16, quy mô nhỏ): Python 3.13, torch 2.11.0+cu128,
 transformers 5.16.1, flash-linear-attention 0.5.2, causal-conv1d 1.7.0, datasets 4.8.5. Ngày 19/10/2026, G0 đạt trên
@@ -45,9 +46,12 @@ pip install -e ".[dev,model,data,baselines,teacher]" "transformers==5.16.1" flas
 TORCH_CUDA_ARCH_LIST=9.0 MAX_JOBS=8 pip install --no-build-isolation causal-conv1d
 python -c "import torch, transformers, fla, causal_conv1d; print(torch.__version__, transformers.__version__, torch.cuda.is_available())"
 pytest -q                                   # 39 passed (chạy trên CPU)
-export HF_TOKEN=...                         # không bắt buộc cho G0/G1 (Qwen3.5 không gated), nhưng tránh bị giới hạn tốc độ tải
+export HF_TOKEN=...                         # bắt buộc: token chủ đề tài cấp, đọc được repo private thanthienhai/vilatent-qa-gen
 mkdir -p logs
 ```
+
+`HF_TOKEN` cần cho bước lọc QA (mục 5) và cho phần QA của lượt thử ở mục 2. G0 và G1 không cần nó (Qwen3.5 không
+gated), nhưng có token thì tải mô hình không bị giới hạn tốc độ. Không ghi token vào file trong repo.
 
 Các lệnh chạy lâu nên để trong `tmux` hoặc `screen` và ghi log bằng `tee`, như các ví dụ bên dưới. `logs/` không đưa
 lên git.
@@ -60,18 +64,21 @@ Việc này kiểm tra đường bf16 trên đúng máy sẽ chạy G1. Chạy t
 ```bash
 git clone . ../VILATENT-smoke && cd ../VILATENT-smoke
 # PYTHONPATH: dùng mã của bản sao, không phải bản cài editable trỏ về repo chính
-PYTHONPATH=$PWD DTYPE=bfloat16 GPUS="0" SMOKE_SHORT=1 bash scripts/smoke_g1.sh 2>&1 | tee ../VILATENT/logs/smoke.log
+PYTHONPATH=$PWD DTYPE=bfloat16 GPUS="0" SMOKE_SHORT=1 SMOKE_QA=1 bash scripts/smoke_g1.sh 2>&1 | tee ../VILATENT/logs/smoke.log
 cd ../VILATENT
 ```
 
 Với nhiều GPU, đặt `GPUS="0 1"` cho nhanh hơn.
 
-`SMOKE_SHORT=1` chạy mọi giai đoạn của G1 (trừ G0) với vài chục mẫu và 16 bước huấn luyện. Kết quả đạt khi:
+`SMOKE_SHORT=1` chạy mọi giai đoạn của G1 (trừ G0) với vài chục mẫu và 16 bước huấn luyện. `SMOKE_QA=1` chạy thêm
+bước tải và lọc QA của mục 5 trên 500 câu, để kiểm tra sớm `HF_TOKEN`. Kết quả đạt khi:
 
 - Dòng cuối của log là `smoke: done; …`, và lệnh trả về exit 0.
 - `results/g1_dev/g1_report_r4.json` có mặt, kèm một bảng 13 phương pháp trong log.
+- Log có một khối JSON với `"n_input": 500`, rồi đến dòng `=== qa_filter done`.
 
-Dòng `G1: FAIL` ở cuối bảng là **bình thường**: với 16 bước, bộ ghi chưa học được gì. Số liệu của lượt thử không có
+Dòng `G1: FAIL` ở cuối bảng là **bình thường**: với 16 bước, bộ ghi chưa học được gì. Dòng `WARNING: …% rejected by
+the reader` sau khối JSON của QA cũng không phải lỗi. Số liệu của lượt thử không có
 giá trị làm bằng chứng. Nếu lệnh dừng với lỗi: **Dừng**, gửi `logs/smoke.log`. Chạy xong thì xoá `../VILATENT-smoke`.
 
 ## 3. Tuần 1–2: dữ liệu, template, G0
@@ -115,11 +122,8 @@ Khi một reader không đạt, `g0_check.py` trả về exit 1 và `run_g1.sh` 
 **G0 không đạt: Dừng.** Gửi `results/g0/*.json` cùng `logs/g0.log`. Phương án dự phòng (Qwen2.5-1.5B và 7B với
 L = 2) chỉ được dùng khi chủ đề tài đồng ý.
 
-### QA sinh tự động: không làm trong G0/G1
-
-QA sinh tự động dành cho tuần 4–6; G1 **không** dùng. Câu hỏi đã được sinh ở ngoài cụm và đẩy lên repo Hugging Face
-private `thanthienhai/vilatent-qa-gen`. Vì vậy **không chạy `qa_generate`, `qa_download` hay `qa_filter`** trong
-G0/G1, và không cần gửi corpus đi. Bước lọc chạy trên cụm ở tuần 4–6, theo hướng dẫn riêng của G2.
+Không chạy `qa_generate` trên cụm: câu hỏi đã được sinh ở ngoài cụm (cụm không gọi được endpoint iCOMM). Không cần
+gửi corpus đi.
 
 ## 4. Tuần 3: G1 trên Qwen3.5-2B ở 4×
 
@@ -185,24 +189,41 @@ Trên ViQuAD dev ở 4×, G1 đạt khi thoả cả ba điều kiện:
 Kết quả nằm ở `G1_pass` trong `results/g1_dev/g1_report_r4.json`, và ở dòng `G1: PASS` hoặc `G1: FAIL` cuối log.
 Người chạy không cần diễn giải kết quả. Chỉ cần gửi về.
 
-**G1 không đạt:** không chạy gì thêm, gửi kết quả. Chủ đề tài sẽ quyết định thử W2 hay chuyển sang Hướng B
+**G1 không đạt:** chỉ chạy thêm mục 5 (lọc QA), rồi gửi kết quả. Chủ đề tài sẽ quyết định thử W2 hay chuyển sang Hướng B
 (`docs/VILATENT.md`). Không chạy reader 9B khi chưa qua G1.
 
-## 5. Gửi kết quả
+## 5. Sau G1: lọc QA sinh tự động (khoảng 1 giờ)
+
+G1 không dùng bộ QA này; nó là dữ liệu huấn luyện cho tuần 4–6. Lọc ngay sau G1 để chủ đề tài biết sớm tỉ lệ bị loại
+khi lập kế hoạch cho tuần 4–6. Chạy sau khi G1 xong, dù G1 đạt hay không:
+
+```bash
+bash scripts/run_g1.sh qa_download qa_filter 2>&1 | tee -a logs/qa_filter.log
+```
+
+| Bước | Việc | Sinh ra | Kiểm tra |
+| --- | --- | --- | --- |
+| `qa_download` | tải `qa_raw.jsonl` (57 MB) và file meta từ repo private, đúng revision `QA_REVISION`, rồi so SHA-256 | `data/qa_gen/qa_raw.jsonl`, `qa_raw.jsonl.meta.json` | không có dòng `does not match its meta sha256` |
+| `qa_filter` | luật lọc, rồi Qwen3.5-2B đọc đoạn văn đầy đủ và trả lời từng câu (khoảng 55 nghìn câu, một GPU), giữ câu đạt F1 ≥ 0,8 | `data/qa_gen/qa_clean.jsonl`, `qa_clean.jsonl.meta.json` | log in một khối JSON có `"n_input": 55480` và `"kept"` |
+
+Thời gian là ước lượng, chưa đo trên H100. `qa_filter` chỉ dùng một GPU, dù `GPUS` có nhiều GPU. Nếu log in `WARNING:
+…% rejected by the reader (> 20%)` thì **không phải lỗi**, cứ gửi kết quả về: chủ đề tài sẽ xử lý theo bảng rủi ro.
+
+## 6. Gửi kết quả
 
 ```bash
 tar czf vilatent_g0_g1.tgz logs results/g0 results/g1_dev runs/*/metrics.jsonl runs/*/config.json data/*/*.meta.json
 ```
 
-Gói này nhỏ (vài MB). Kèm thêm:
+Gói này nhỏ (vài MB) và đã gồm thống kê lọc QA (`data/qa_gen/qa_clean.jsonl.meta.json`). Kèm thêm:
 
 - Kết quả của `git rev-parse HEAD` và `pip freeze`.
 - Kết quả của `nvidia-smi --query-gpu=name,memory.total --format=csv`.
 
-Giữ lại trên máy chạy (không xoá) `runs/*/best.pt` và `data/`, vì tuần 4–6 dùng lại chúng. Chỉ gửi đi khi được yêu
+Giữ lại trên máy chạy (không xoá) `runs/*/best.pt` và `data/` (kể cả `data/qa_gen/qa_clean.jsonl`), vì tuần 4–6 dùng lại chúng. Chỉ gửi đi khi được yêu
 cầu, vì dung lượng khoảng chục GB.
 
-## 6. Sự cố thường gặp
+## 7. Sự cố thường gặp
 
 | Triệu chứng | Nguyên nhân thường gặp | Cách xử lý |
 | --- | --- | --- |
@@ -216,6 +237,8 @@ cầu, vì dung lượng khoảng chục GB.
 | `… was trained with another reader template`, `template differs` hoặc `teacher computed with another template` | `configs/readers/*.json` bị render lại sau khi đã tính logit thầy hoặc đã huấn luyện | khôi phục bằng `git checkout configs/readers`, hoặc chạy lại từ `teacher`; báo chủ đề tài |
 | Một bước in xong kết quả nhưng tiến trình không thoát, không dùng CPU | lỗi treo khi thoát sau khi đọc dataset dạng streaming (đã sửa trong `build_corpus.py`) | nếu gặp lại ở bước nào, ghi tên bước, dừng bằng Ctrl+C, rồi báo chủ đề tài |
 | Tải Hugging Face chậm hoặc lỗi 429 | giới hạn tốc độ khi chưa đăng nhập | đặt `HF_TOKEN` |
+| `qa_download` lỗi 401, 403, 404 hoặc `Repository Not Found` | chưa đặt `HF_TOKEN`, hoặc token không đọc được repo private | xin chủ đề tài token có quyền đọc `thanthienhai/vilatent-qa-gen`, rồi chạy lại `run_g1.sh qa_download qa_filter` |
+| `qa_raw.jsonl does not match its meta sha256` | file tải về hỏng hoặc sai revision | **Dừng**, gửi `logs/qa_filter.log` |
 
 Trên GPU không có bf16 (ví dụ T4), đặt `DTYPE=float16`: reader chạy fp16, bộ ghi dùng autocast fp16 và loss được
 scale bằng GradScaler. Khoảng 10 bước đầu bị bỏ qua là bình thường, vì GradScaler đang tìm hệ số scale. Kết quả fp16
@@ -229,8 +252,8 @@ chỉ dùng để thử đường chạy, không dùng làm bằng chứng cho G
 | `DTYPE` | `bfloat16` | `float16` chỉ dùng cho GPU không có bf16 |
 | `READER`, `READER_9B`, `SLUG`, `RATIO` | `Qwen/Qwen3.5-2B`, `Qwen/Qwen3.5-9B`, `qwen3.5-2b`, `4` | không đổi cho G0 và G1 |
 | `TEACHER_URL`, `TEACHER_MODEL` | endpoint iCOMM 27B | chỉ dùng cho `qa_generate`, chạy ngoài cụm |
-| `QA_REPO`, `QA_REVISION` | `thanthienhai/vilatent-qa-gen`, `28e3ac26…` | repo HF private chứa QA sinh tự động, cho `qa_download` ở G2 (tuần 4–6). Cần `HF_TOKEN` có quyền đọc repo này; G0/G1 không dùng |
-| `SMOKE_QA`, `SMOKE_QA_ROWS` | `0`, `500` | `SMOKE_QA=1`: `smoke_g1.sh` chạy thêm `qa_download` và `qa_filter` trên 500 câu đầu (cần `HF_TOKEN` như trên). Không cần cho G0/G1 |
+| `QA_REPO`, `QA_REVISION` | `thanthienhai/vilatent-qa-gen`, `28e3ac26…` | repo HF private chứa QA sinh tự động, cho `qa_download` (mục 5). Cần `HF_TOKEN` có quyền đọc repo này; giữ mặc định |
+| `SMOKE_QA`, `SMOKE_QA_ROWS` | `0`, `500` | `SMOKE_QA=1` (mục 2): `smoke_g1.sh` chạy thêm `qa_download` và `qa_filter` trên 500 câu đầu (cần `HF_TOKEN` như trên) |
 | `N_PAIRS`, `N_DEV_PAIRS`, `N_WIKI`, `N_NEWS` | 96.000, 1.000, 200.000, 200.000 | cỡ dữ liệu giai đoạn 1; giữ mặc định |
 | `G0_READERS` | cả hai reader | reader được kiểm tra ở G0 (mục 3) |
 | `TRAIN_ARGS`, `EVAL_ARGS` | rỗng | dành cho `scripts/smoke_g1.sh`. Ngoài lượt thử, `TRAIN_ARGS` chỉ dùng để giảm micro-batch khi thiếu bộ nhớ |
