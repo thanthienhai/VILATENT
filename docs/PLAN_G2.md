@@ -38,7 +38,7 @@ Hai việc G2 **không** quyết định:
 | Số lớp L | `n_layers` là tham số của config; L = 8 chỉ cần file YAML mới (L phải là bội số của 4) |
 | O-none | `init_from` để trống thì giai đoạn 2 bắt đầu từ bộ ghi mới |
 | MDE, bootstrap cụm, Holm | `vilatent/stats.py` (`mde`, `paired_test`, `holm`) |
-| Sinh và lọc QA | `scripts/generate_qa.py`, `scripts/filter_qa.py`; **chưa từng chạy** (endpoint iCOMM nằm trong mạng riêng) |
+| Sinh và lọc QA | `scripts/generate_qa.py`, `scripts/filter_qa.py`. Ngày 21/10/2026 đã chạy thử prompt đầu trên 2.090 đoạn (5.917 câu, giữ ở `data/qa_gen/qa_raw_prompt1.jsonl`); sau khảo sát, prompt được sửa và `filter_qa.py` thêm luật lọc, lấy mẫu câu chép (D1). `filter_qa.py` chưa chạy trên GPU |
 | Chống rò rỉ | `scripts/leak_filter.py`, sidecar `.meta.json` |
 | Huấn luyện, đánh giá QA, chọn theo loss dev | Dùng chung với G1 |
 
@@ -46,7 +46,40 @@ Hai việc G2 **không** quyết định:
 
 ### Dữ liệu
 
-**D1. QA sinh tự động.** Chạy `bash scripts/run_g1.sh qa_gen` (nếu chưa chạy ngầm từ tuần 1), rồi:
+**D1. QA sinh tự động.** Cụm GPU không gọi được endpoint iCOMM, nên chia làm hai nơi:
+`bash scripts/run_g1.sh qa_generate` chạy ở một máy trong mạng iCOMM (chỉ cần CPU và `data/corpus/docs.jsonl` lấy từ
+cụm sau bước `data`), rồi chép `data/qa_gen/qa_raw.jsonl` về cụm và chạy `bash scripts/run_g1.sh qa_filter`.
+
+Endpoint `http://172.16.9.11:30049/v1` đo ngày 21/10/2026: khoảng 1,85 request/s, bão hoà từ 16 luồng, nên 20.000
+đoạn mất khoảng 3 giờ. Khảo sát 5.917 câu của prompt đầu (so với ViQuAD dev):
+
+| Chỉ số | ViQuAD dev | Prompt đầu |
+| --- | --- | --- |
+| Đáp án, trung vị số âm tiết | 6 | 3 |
+| Câu hỏi chép câu chứa đáp án (≥ 80% âm tiết trùng) | 10,2% (train 10,5%) | 25,3% |
+| Đáp án nằm trong câu hỏi | 1,1% | 0,6% |
+| Nhãn "số" mà đáp án không có số | – | 3,2% |
+
+Đọc tay 25 câu: 20 tốt, 3 sai nhãn loại, 2 đáp án thiếu cụm. Vì vậy prompt yêu cầu thêm đáp án trọn cụm, đáp án loại
+"số" có con số và câu hỏi diễn đạt lại. `filter_qa.py` thêm hai luật (đáp án nằm trong câu hỏi, nhãn "số" không có số)
+trước bước kiểm tra hai chiều, và sau đó lấy mẫu câu chép để tỉ lệ bằng ViQuAD train. Chạy thử hai bước này (không có
+reader) trên dữ liệu prompt đầu: 206 câu bị luật loại, giữ 500/1.429 câu chép, còn 4.782 câu. Trước khi chạy đủ 20.000
+đoạn với prompt mới: chạy thử khoảng 150 đoạn và khảo sát lại như bảng trên.
+
+Hai lượt thử 150 đoạn (cùng đoạn văn, so với prompt đầu):
+
+| Chỉ số | Prompt 1 | Prompt 2 (trọn cụm, diễn đạt lại) | Prompt 3 (câu số chỉ khi đoạn có số, mô tả ≤ 30 âm tiết) | ViQuAD train |
+| --- | --- | --- | --- | --- |
+| Câu chép câu chứa đáp án | 25,2% | 11,4% | 12,5% | 10,5% |
+| Đáp án, phân vị 25/50/75 (âm tiết) | 2/3/5 | 2/3/5 | 2/4/9 | 3/6/14 |
+| Đáp án > 15 âm tiết | 0% | 0% | 7,6% | 21,0% |
+| Nhãn "số" mà đáp án không có số | 6 | 10 | 4 | – |
+
+Prompt 3 là bản dùng để chạy đủ. Chỉ 7/150 đoạn không có số, nên phần lớn câu "số" sai nhãn vẫn còn và được
+`filter_qa.py` loại. Đáp án mô tả dài hơn làm bước kiểm tra hai chiều (F1 ≥ 0,8) khó đạt hơn: cần xem tỉ lệ bị loại
+theo loại đáp án.
+
+Sau khi lọc:
 
 - Đếm tỉ lệ bị loại ở bước kiểm tra hai chiều. Trên 20% là dấu hiệu rủi ro (docs/VILATENT.md, bảng rủi ro): một người
   kiểm 200 mẫu, giảm tỉ trọng dữ liệu sinh.

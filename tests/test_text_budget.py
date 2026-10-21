@@ -1,7 +1,7 @@
 import math
 
 from vilatent.budget import chunk_context, memory_budget, pack_chunks
-from vilatent.text import split_sentences, syllables
+from vilatent.text import contains_syllables, has_number, question_overlap, split_sentences, syllables
 
 
 def sentences(text):
@@ -25,6 +25,29 @@ def test_split_no_boundary_before_lowercase():
 
 def test_syllables():
     assert syllables("Hà Nội, năm 1010!") == ["hà", "nội", "năm", "1010"]
+
+
+def test_contains_syllables_matches_whole_syllables():
+    assert contains_syllables("Đoạn văn đề cập đến loài cây nào?", "cây")
+    assert contains_syllables("Ai lãnh đạo Đảng Dân chủ?", "đảng dân chủ")
+    assert not contains_syllables("Con cầy hương sống ở đâu?", "cây")
+    assert not contains_syllables("Năm 1930 có gì?", "3")
+    assert not contains_syllables("Câu hỏi?", "")
+
+
+def test_has_number():
+    for text in ("năm 1943", "60% - 70%", "hai mươi người", "phiên đầu tiên", "khóa X", "thế kỷ XIX"):
+        assert has_number(text), text
+    for text in ("ATP", "thời trung cổ", "Vitamin C", "Vitamin E", "nhiều giải pháp", "Lý, Bàn, Hoàng"):
+        assert not has_number(text), text
+
+
+def test_question_overlap_uses_the_answer_sentence():
+    context = "Hà Nội là thủ đô. Làng gốm Kim Lan thuộc huyện Gia Lâm."
+    assert question_overlap("Làng gốm Kim Lan thuộc huyện nào?", context, "huyện Gia Lâm") == 6 / 7
+    assert question_overlap("Thủ đô là gì?", context, "Hà Nội") == 3 / 4
+    assert question_overlap("Nơi nào?", context, "Gia Lâm") == 0.0
+    assert question_overlap("Nơi nào?", context, "đô. Làng") == 0.0  # answer across sentences
 
 
 def test_pack_chunks_respects_max_and_sentence_ends():

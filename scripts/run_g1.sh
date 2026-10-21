@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # G0 + G1 pipeline, one stage at a time (docs/RUN_G0_G1.md):
 #   bash scripts/run_g1.sh data template g0          # week 1–2
-#   bash scripts/run_g1.sh qa_gen                     # background job (teacher endpoint)
 #   bash scripts/run_g1.sh teacher stage1 stage2 eval select fallback report   # week 3
+# Auto-generated QA (not used by G1; for weeks 4–6). The GPU cluster cannot reach the teacher
+# endpoint, so it runs in two places:
+#   bash scripts/run_g1.sh qa_generate   # machine inside the iCOMM network, CPU only; needs
+#                                        # data/corpus/docs.jsonl copied from the cluster
+#   bash scripts/run_g1.sh qa_filter     # GPU cluster, once data/qa_gen/qa_raw.jsonl is copied back
 # Each stage reads only the files written by the previous ones.
 # Independent runs (teacher files, stage 1, stage 2, evaluation) are spread over the GPUs in GPUS.
 # The size variables below exist for scripts/smoke_g1.sh; leave them at their defaults for G1.
@@ -12,7 +16,7 @@ READER=${READER:-Qwen/Qwen3.5-2B}
 READER_9B=${READER_9B:-Qwen/Qwen3.5-9B}
 SLUG=${SLUG:-qwen3.5-2b}
 RATIO=${RATIO:-4}
-TEACHER_URL=${TEACHER_URL:-http://172.16.9.11:30048/v1}
+TEACHER_URL=${TEACHER_URL:-http://172.16.9.11:30049/v1}
 TEACHER_MODEL=${TEACHER_MODEL:-icmodel/icom-model-llm-ic-v3.8-27b}
 N_PAIRS=${N_PAIRS:-96000}
 N_DEV_PAIRS=${N_DEV_PAIRS:-1000}
@@ -87,15 +91,16 @@ stage_g0() {
   done
 }
 
-stage_qa_gen() {
-  log "auto-generated QA with the teacher, then the two-way check with $READER"
+stage_qa_generate() {
+  log "auto-generated QA with the teacher at $TEACHER_URL (no GPU)"
   python scripts/generate_qa.py --docs data/corpus/docs.jsonl --base-url "$TEACHER_URL" --model "$TEACHER_MODEL" \
     --out data/qa_gen/qa_raw.jsonl
-  local gpus=($GPUS)
-  local qa_gpu=${QA_GPU:-${gpus[${#gpus[@]} - 1]}}  # runs in the background: keep it off the GPUs of G1
-  log "two-way check on GPU $qa_gpu"
-  CUDA_VISIBLE_DEVICES=$qa_gpu python scripts/filter_qa.py --input data/qa_gen/qa_raw.jsonl --reader "$READER" \
-    --reader-config "$CFG" --eval-files $EVAL_FILES --out data/qa_gen/qa_clean.jsonl --dtype "$DTYPE" --quant "$QUANT"
+}
+
+stage_qa_filter() {
+  log "two-way check of the auto-generated QA with $READER"
+  python scripts/filter_qa.py --input data/qa_gen/qa_raw.jsonl --reader "$READER" --reader-config "$CFG" \
+    --eval-files $EVAL_FILES --out data/qa_gen/qa_clean.jsonl --dtype "$DTYPE" --quant "$QUANT"
 }
 
 stage_teacher() {

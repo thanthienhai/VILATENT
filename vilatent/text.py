@@ -63,6 +63,34 @@ def split_sentences(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+_NUMBER_WORDS = re.compile(r"\b(một|hai|ba|bốn|tư|năm|sáu|bảy|bẩy|tám|chín|mười|mươi|chục|trăm|nghìn|ngàn|vạn|"
+                           r"triệu|tỷ|tỉ|nửa|rưỡi|đôi|nhất|đầu tiên)\b")
+_ROMAN = re.compile(r"\b[IVX]+\b")  # thế kỷ XIX, khóa X; no C/L/M so that "Vitamin C" is not a number
+
+
+def has_number(text: str) -> bool:
+    """True if ``text`` holds a digit, a Vietnamese number word or a Roman numeral."""
+    return bool(re.search(r"\d", text) or _NUMBER_WORDS.search(text.lower()) or _ROMAN.search(text))
+
+
+def contains_syllables(text: str, part: str) -> bool:
+    """True if the syllables of ``part`` occur as a contiguous run in ``text`` (so "cây" is in
+    "loài cây nào" but not in "cầy")."""
+    whole, sub = syllables(text), syllables(part)
+    return bool(sub) and any(whole[i:i + len(sub)] == sub for i in range(len(whole) - len(sub) + 1))
+
+
+def question_overlap(question: str, context: str, answer: str) -> float:
+    """Share of the question's distinct syllables that occur in the first sentence of ``context``
+    containing ``answer`` (0 when no single sentence contains it). Near 1, the question copies
+    that sentence and a lexical match finds the answer."""
+    q = set(syllables(question))
+    for start, end in split_sentences(context):
+        if answer in context[start:end]:
+            return len(q & set(syllables(context[start:end]))) / max(len(q), 1)
+    return 0.0
+
+
 def _append(spans: list, text: str, start: int, end: int) -> None:
     piece = text[start:end]
     if piece.strip():

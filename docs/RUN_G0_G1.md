@@ -26,7 +26,7 @@ Nguyên tắc chung:
 | Hệ điều hành | Linux, có CUDA toolkit (`nvcc`) khớp với bản CUDA của torch, để build `causal-conv1d` |
 | Đĩa | Nên có ≥ 100 GB trống (ước lượng): bộ nhớ đệm Hugging Face khoảng 30 GB (Qwen3.5-2B và 9B, xlm-roberta-large của LLMLingua-2, Wikipedia tiếng Việt); `data/` vài GB (logit thầy của cặp giai đoạn 1 khoảng 1,5 GB); `runs/` khoảng 1 GB mỗi checkpoint × 9 |
 | RAM | ≥ 32 GB |
-| Mạng | Truy cập được Hugging Face Hub (mô hình và dataset). Bước `qa_gen` cần thêm endpoint thầy iCOMM `http://172.16.9.11:30048/v1` trong mạng nội bộ |
+| Mạng | Truy cập được Hugging Face Hub (mô hình và dataset). Không cần endpoint iCOMM: G0 và G1 không gọi nó |
 
 Môi trường đã chạy thử toàn bộ luồng (Kaggle, 2× T4, fp16, quy mô nhỏ): Python 3.13, torch 2.11.0+cu128,
 transformers 5.16.1, flash-linear-attention 0.5.2, causal-conv1d 1.7.0, datasets 4.8.5. Ngày 19/10/2026, G0 đạt trên
@@ -44,7 +44,7 @@ pip install -e ".[dev,model,data,baselines,teacher]" "transformers==5.16.1" flas
 # causal-conv1d phải build từ source; 9.0 là kiến trúc của H100 (A100: 8.0). Mất một lúc.
 TORCH_CUDA_ARCH_LIST=9.0 MAX_JOBS=8 pip install --no-build-isolation causal-conv1d
 python -c "import torch, transformers, fla, causal_conv1d; print(torch.__version__, transformers.__version__, torch.cuda.is_available())"
-pytest -q                                   # 36 passed (chạy trên CPU)
+pytest -q                                   # 39 passed (chạy trên CPU)
 export HF_TOKEN=...                         # không bắt buộc (Qwen3.5 không gated), nhưng tránh bị giới hạn tốc độ tải
 mkdir -p logs
 ```
@@ -66,7 +66,7 @@ cd ../VILATENT
 
 Với nhiều GPU, đặt `GPUS="0 1"` cho nhanh hơn.
 
-`SMOKE_SHORT=1` chạy mọi giai đoạn của G1 (trừ G0 và `qa_gen`) với vài chục mẫu và 16 bước huấn luyện. Kết quả đạt khi:
+`SMOKE_SHORT=1` chạy mọi giai đoạn của G1 (trừ G0) với vài chục mẫu và 16 bước huấn luyện. Kết quả đạt khi:
 
 - Dòng cuối của log là `smoke: done; …`, và lệnh trả về exit 0.
 - `results/g1_dev/g1_report_r4.json` có mặt, kèm một bảng 13 phương pháp trong log.
@@ -115,21 +115,12 @@ Khi một reader không đạt, `g0_check.py` trả về exit 1 và `run_g1.sh` 
 **G0 không đạt: Dừng.** Gửi `results/g0/*.json` cùng `logs/g0.log`. Phương án dự phòng (Qwen2.5-1.5B và 7B với
 L = 2) chỉ được dùng khi chủ đề tài đồng ý.
 
-### Chạy ngầm từ tuần 1: QA sinh tự động
+### Sau bước `data`: gửi corpus cho việc sinh QA
 
-G1 **không** dùng dữ liệu này (nó dành cho tuần 4–6), nhưng nên chạy ngầm ngay từ tuần 1. Bước này cần endpoint thầy,
-và script tự chạy tiếp được nếu bị ngắt:
-
-```bash
-QA_GPU=1 nohup bash scripts/run_g1.sh qa_gen > logs/qa_gen.log 2>&1 &
-```
-
-Cuối bước, `filter_qa` nạp reader lên GPU `QA_GPU` (mặc định là GPU cuối trong `GPUS`). Khi G1 chạy cùng lúc, đặt
-`QA_GPU` là một GPU mà G1 không dùng. Nếu chỉ có 1 GPU, chạy `qa_gen` sau khi G1 xong.
-
-Bước này chưa từng chạy thử, vì endpoint chỉ có trong mạng nội bộ. Nếu lỗi, gửi `logs/qa_gen.log`; việc này không
-chặn G1. Cuối bước, script in tỉ lệ câu bị loại ở bước kiểm tra hai chiều. Nếu tỉ lệ vượt 20%, cần người kiểm tra
-200 mẫu (bảng rủi ro trong `docs/VILATENT.md`).
+QA sinh tự động (dành cho tuần 4–6, G1 **không** dùng) cần endpoint iCOMM, mà cụm không gọi được. Vì vậy **không chạy
+`qa_generate` hay `qa_filter` trên cụm** trong G0/G1. Chỉ cần làm một việc: khi bước `data` xong, gửi cho chủ đề tài
+`data/corpus/docs.jsonl` và `data/corpus/docs.jsonl.meta.json`. Chủ đề tài sẽ sinh câu hỏi ở một máy trong mạng
+iCOMM; bước lọc chạy trên cụm ở tuần 4–6, theo hướng dẫn riêng của G2.
 
 ## 4. Tuần 3: G1 trên Qwen3.5-2B ở 4×
 
@@ -220,7 +211,7 @@ cầu, vì dung lượng khoảng chục GB.
 | Build `causal-conv1d` lỗi | không có `nvcc`, hoặc `TORCH_CUDA_ARCH_LIST` sai | cài CUDA toolkit khớp với `torch.version.cuda`; đặt đúng kiến trúc GPU |
 | `smoke_g1: data/ exists` | chạy thử trong repo chính | chạy trong bản sao riêng (mục 2) |
 | `CUDA out of memory` khi huấn luyện | micro-batch 8 không vừa GPU | giữ nguyên batch hiệu dụng và giảm micro-batch: `TRAIN_ARGS="--micro-batch 4" bash scripts/run_g1.sh stage1 …`; ghi lại trong báo cáo |
-| `gradient check failed on the writer …` ở bước đầu (với fp16: `gradients still not finite after 20 steps`) | lỗi số học hoặc lỗi cài đặt | **Dừng**, gửi `logs/` và `runs/<tên>/metrics.jsonl` |
+| `gradient check failed on the writer …` ở bước đầu (với fp16: `gradients still not finite after 20 steps` hoặc `no step out of N had finite gradients`), hoặc `dev loss was never finite` | lỗi số học hoặc lỗi cài đặt | **Dừng**, gửi `logs/` và `runs/<tên>/metrics.jsonl` |
 | `only N wiki pairs for M wanted: build a larger corpus` | corpus quá ít bài đủ dài | **Dừng**, gửi `data/corpus/docs.jsonl.meta.json` |
 | `N examples have no teacher` | dữ liệu đã thay đổi sau khi chạy `teacher` | chạy lại `run_g1.sh teacher` rồi các bước sau |
 | `… was trained with another reader template`, `template differs` hoặc `teacher computed with another template` | `configs/readers/*.json` bị render lại sau khi đã tính logit thầy hoặc đã huấn luyện | khôi phục bằng `git checkout configs/readers`, hoặc chạy lại từ `teacher`; báo chủ đề tài |
@@ -238,7 +229,7 @@ chỉ dùng để thử đường chạy, không dùng làm bằng chứng cho G
 | `GPUS` | `0` | danh sách GPU. Các lượt độc lập (logit thầy, bốn lượt giai đoạn 1, năm lượt giai đoạn 2, hai nhóm đánh giá) chia vòng tròn cho các GPU này |
 | `DTYPE` | `bfloat16` | `float16` chỉ dùng cho GPU không có bf16 |
 | `READER`, `READER_9B`, `SLUG`, `RATIO` | `Qwen/Qwen3.5-2B`, `Qwen/Qwen3.5-9B`, `qwen3.5-2b`, `4` | không đổi cho G0 và G1 |
-| `TEACHER_URL`, `TEACHER_MODEL` | endpoint iCOMM 27B | chỉ dùng cho `qa_gen` |
+| `TEACHER_URL`, `TEACHER_MODEL` | endpoint iCOMM 27B | chỉ dùng cho `qa_generate`, chạy ngoài cụm |
 | `N_PAIRS`, `N_DEV_PAIRS`, `N_WIKI`, `N_NEWS` | 96.000, 1.000, 200.000, 200.000 | cỡ dữ liệu giai đoạn 1; giữ mặc định |
 | `G0_READERS` | cả hai reader | reader được kiểm tra ở G0 (mục 3) |
 | `TRAIN_ARGS`, `EVAL_ARGS` | rỗng | dành cho `scripts/smoke_g1.sh`. Ngoài lượt thử, `TRAIN_ARGS` chỉ dùng để giảm micro-batch khi thiếu bộ nhớ |

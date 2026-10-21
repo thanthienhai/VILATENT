@@ -5,7 +5,7 @@
 #
 # The numbers it produces are NOT G0/G1 evidence: tiny data, 20 steps, fp16 on T4. G0 runs and
 # its report is kept, but a G0 failure does not stop the smoke test (G0 on T4 does not count).
-# qa_gen is skipped (the iCOMM endpoint is on a private network).
+# qa_generate and qa_filter are skipped (the iCOMM endpoint is on a private network; G1 does not use them).
 #
 # It writes data/, runs/ and results/ like the real pipeline, so it refuses to start where
 # they already exist: run it in a fresh copy of the repository.
