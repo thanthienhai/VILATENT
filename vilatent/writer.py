@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import math
+import random
 
 import torch
 from torch import nn
@@ -134,6 +135,10 @@ class MemoryWriter(nn.Module):
         body = [p for p in self.body.parameters() if p.requires_grad]
         return [{"params": head, "lr": lr_adapter}, {"params": body, "lr": lr_writer}]
 
+    def checked_params(self) -> list[tuple[str, torch.Tensor]]:
+        """Parameters whose gradient must be finite and non-zero after the first step."""
+        return [("adapter", self.adapter.weight), ("scale", self.scale)]
+
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
         x = x.float()
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.scale
@@ -158,3 +163,69 @@ class MemoryWriter(nn.Module):
             sizes = [p.shape[0] for p in pooled]
             memory = self.adapter(self.normalize(torch.cat(pooled)))
         return list(memory.split(sizes))
+
+
+def prompt_init_ids(texts: list[str], tokenizer, n: int, seed: int = 0, n_texts: int = 500) -> list[int]:
+    """``n`` reader token ids drawn (seeded) from the tokens of up to ``n_texts`` training
+    contexts: the initial vectors of a PromptWriter are embeddings of ordinary Vietnamese tokens."""
+    rng = random.Random(seed)
+    pool = [t for text in rng.sample(texts, min(n_texts, len(texts)))
+            for t in tokenizer(text, add_special_tokens=False)["input_ids"]]
+    return [rng.choice(pool) for _ in range(n)]
+
+
+class PromptWriter(nn.Module):
+    """Control for ViLatent-ME (review of 22/10/2026): the memory is replaced by learned vectors
+    that do not depend on the context. A chunk of n tokens receives the first ceil(n / r)
+    vectors of one learned table, so the reader gets exactly the vector count, the boundary
+    embeddings and the BM25 sentences of ME, and the same training (CE + λ·KL on the answers).
+    What this control learns is the answer style of the training set, not the context, so
+    ME minus this control is what the memory content adds (a condition of gate G1).
+
+    It has the interface of MemoryWriter (forward, config, param_groups, mem_start/mem_end);
+    the vectors start as embeddings of tokens of training contexts (prompt_init_ids)."""
+
+    def __init__(self, reader, tokenizer, ratio: int, chunk_tokens: int, init_ids: list[int] | None = None):
+        super().__init__()
+        weight = reader.get_input_embeddings().weight
+        self.ratio, self.chunk_tokens = ratio, chunk_tokens
+        self.n_prompt = math.ceil(chunk_tokens / ratio)  # the most vectors one chunk can need
+        self.sees_question = False
+        self.emb_norm = mean_embedding_norm(reader)
+        init = (weight[torch.tensor(init_ids, device=weight.device)].float() if init_ids is not None
+                else torch.zeros(self.n_prompt, weight.shape[1]))
+        if init.shape[0] != self.n_prompt:
+            raise ValueError(f"PromptWriter needs {self.n_prompt} initial ids, got {init.shape[0]}")
+        self.prompt = nn.Parameter(init.clone())
+        self.mem_start = nn.Parameter(text_embedding(reader, tokenizer, "«"))
+        self.mem_end = nn.Parameter(text_embedding(reader, tokenizer, "»"))
+        self.to(weight.device)
+
+    def config(self) -> dict:
+        return {"kind": "prompt", "ratio": self.ratio, "chunk_tokens": self.chunk_tokens}
+
+    def shape_config(self) -> dict:
+        return self.config()
+
+    def param_groups(self, lr_adapter: float, lr_writer: float) -> list[dict]:
+        """Every parameter is a vector in the reader's embedding space: all at lr_adapter."""
+        return [{"params": [self.prompt, self.mem_start, self.mem_end], "lr": lr_adapter}]
+
+    def checked_params(self) -> list[tuple[str, torch.Tensor]]:
+        return [("prompt", self.prompt)]
+
+    def forward(self, chunk_embeds: torch.Tensor, starts: torch.Tensor, lengths: torch.Tensor) -> list[torch.Tensor]:
+        """Same signature as MemoryWriter.forward; only ``lengths`` is used."""
+        groups = ((lengths + self.ratio - 1) // self.ratio).tolist()
+        if max(groups) > self.n_prompt:
+            raise ValueError(f"a chunk needs {max(groups)} vectors, the prompt has {self.n_prompt}")
+        return [self.prompt[:g] for g in groups]
+
+
+def build_writer(reader, tokenizer, config: dict, init_ids: list[int] | None = None) -> nn.Module:
+    """Writer of a checkpoint's ``writer_config``: a PromptWriter when ``kind`` is "prompt",
+    else the MemoryWriter (W0/W5)."""
+    config = dict(config)
+    if config.pop("kind", "layers") == "prompt":
+        return PromptWriter(reader, tokenizer, init_ids=init_ids, **config)
+    return MemoryWriter(reader, tokenizer, **config)

@@ -1,13 +1,13 @@
 # G1, stage 2, ViLatent-M (W0 memory only) at 4×, from the 4× stage-1 writer (O-LM).
-# The checkpoint is chosen by dev loss (CE + λ·KL) on ViQuAD dev, never on test.
+# The checkpoint is chosen by dev loss (CE + λ·KL) on ViQuAD select, never on the gate or test articles.
 reader: Qwen/Qwen3.5-2B
 reader_config: configs/readers/qwen3.5-2b.json
 task: qa
 mode: M
 train: data/tasks/viquad_train_clean.jsonl
-dev: data/tasks/viquad_dev.jsonl
+dev: data/tasks/viquad_select.jsonl
 teacher_train: data/teacher/qwen3.5-2b/viquad_train.pt
-teacher_dev: data/teacher/qwen3.5-2b/viquad_dev.pt
+teacher_dev: data/teacher/qwen3.5-2b/viquad_select.pt
 init_from: runs/g1_stage1_r4/best.pt
 out_dir: runs/g1_stage2_m_r4
 ratio: 4
@@ -22,7 +22,7 @@ max_grad_norm: 1.0
 warmup_frac: 0.03
 steps: 2000
 effective_batch: 32
-micro_batch: 8
+micro_batch: 32  # effective_batch 32 in one pass: peak ~10.5 GB at 8 on H100 (smoke 22/10/2026)
 eval_every: 250
 log_every: 10
 seed: 0

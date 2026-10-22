@@ -16,6 +16,8 @@ def main():
     ap.add_argument("--init-from")
     ap.add_argument("--ratio", type=int)
     ap.add_argument("--mode", choices=["M", "ME", "W5"])
+    ap.add_argument("--memory-factor", type=int, help="f of ME and of the prompt control (f* chosen at G1)")
+    ap.add_argument("--lr-adapter", type=float)
     ap.add_argument("--steps", type=int)
     ap.add_argument("--seed", type=int)
     ap.add_argument("--micro-batch", type=int)
@@ -26,7 +28,7 @@ def main():
     ap.add_argument("--quant", choices=["none", "int4"], help="int4 reader: T4 smoke test only")
     args = ap.parse_args()
     cfg = TrainConfig.from_yaml(args.config, out_dir=args.out_dir, init_from=args.init_from, ratio=args.ratio,
-                                mode=args.mode,
+                                mode=args.mode, memory_factor=args.memory_factor, lr_adapter=args.lr_adapter,
                                 steps=args.steps, seed=args.seed, micro_batch=args.micro_batch,
                                 effective_batch=args.effective_batch, eval_every=args.eval_every,
                                 dev_limit=args.dev_limit, dtype=args.dtype, quant=args.quant)

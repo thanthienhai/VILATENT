@@ -6,6 +6,11 @@ Modes (vilatent.model): stage 1 always runs in mode M (no question); stage 2 run
 starts from a stage-1 writer at r·f) or W5 (the writer sees the question; it starts from the
 stage-1 W0 writer at r, since seeing the question adds no parameter).
 
+The control "learned prompt + BM25" (``writer: prompt``) runs in mode ME with a
+writer.PromptWriter: context-independent vectors trained from scratch on the same data and loss.
+ME (and the control) reads the BM25 parameters from ``bm25_config`` (configs/bm25.json, the
+values tuned for the bm25 baseline) and stores them in the checkpoint.
+
 Only the writer (copied layers or their LoRA, RMSNorm scale, adapter, boundary embeddings) is
 trained; gradients flow back through the frozen reader. AdamW with two learning rates
 (adapter 1e-4, writer layers 2e-5), no weight decay, gradient norm clipped at 1.0, 3% linear
@@ -19,6 +24,7 @@ Every run writes ``config.json``, ``metrics.jsonl`` (one JSON line per log or ev
 from __future__ import annotations
 
 import json
+import math
 import random
 import time
 from dataclasses import asdict, dataclass
@@ -27,12 +33,13 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from .baselines import load_bm25_params
 from .data import load_examples
 from .model import ViLatent, writer_ratio
 from .reader import fast_delta_rule, load_reader
 from .teacher import load_teacher
 from .template import ReaderTemplate, load_reader_config
-from .writer import MemoryWriter
+from .writer import MemoryWriter, PromptWriter, prompt_init_ids
 
 
 @dataclass
@@ -47,8 +54,10 @@ class TrainConfig:
     teacher_dev: str | None = None
     init_from: str | None = None  # stage-1 best.pt to start stage 2 from (O-LM); None = O-none
     mode: str = "M"  # M, ME (memory at r·f + BM25 sentences, stage 2 only) or W5 (writer sees the question)
+    writer: str = "layers"  # layers (W0/W5 writer) or prompt (control: learned vectors that ignore the context)
+    bm25_config: str = "configs/bm25.json"  # tuned k1, b of the BM25 sentences (ME only)
     ratio: int = 4  # budget ratio r; the writer pools r·f tokens in ME
-    memory_factor: int = 2  # f in ME: 2, 4 or 8, chosen on dev loss (scripts/select_me.py)
+    memory_factor: int = 2  # f in ME: 2, 4 or 8, chosen on the select dev loss (scripts/choose_by_loss.py)
     n_layers: int = 4
     lora_rank: int = 0  # 0: train the copied layers; > 0: LoRA on them
     chunk_tokens: int = 512
@@ -151,7 +160,8 @@ def best_dev_loss(run_dir: str | Path) -> float:
 def choose_by_dev_loss(runs: dict) -> tuple:
     """Key of the run with the lowest dev loss (CE + λ·KL on the same answers and the same
     teacher, so runs with different memory factors are comparable); ties go to the first key.
-    Choosing on loss, not on dev F1, keeps the G1 gate (dev F1) free of selection bias."""
+    The dev set of stage 2 is ViQuAD select, disjoint by article from ViQuAD gate, on which the
+    G1 gate is measured, so the choice does not bias the gate."""
     losses = {key: best_dev_loss(path) for key, path in runs.items()}
     return min(losses, key=lambda key: losses[key]), losses
 
@@ -159,7 +169,7 @@ def choose_by_dev_loss(runs: dict) -> tuple:
 def check_gradients(writer: MemoryWriter) -> None:
     """After the first backward pass: gradients reaching the writer (through every reader
     layer, including the DeltaNet ones) must be finite and non-zero."""
-    for name, p in [("adapter", writer.adapter.weight), ("scale", writer.scale)]:
+    for name, p in writer.checked_params():
         if p.grad is None or not torch.isfinite(p.grad).all() or p.grad.abs().sum() == 0:
             raise RuntimeError(f"gradient check failed on the writer {name}: {p.grad}")
 
@@ -190,8 +200,19 @@ def train(cfg: TrainConfig) -> Path:
     template = ReaderTemplate(load_reader_config(cfg.reader_config), tokenizer)
     if template.cfg["reader"] != cfg.reader:
         raise ValueError(f"{cfg.reader_config} was rendered for {template.cfg['reader']}, not {cfg.reader}")
-    writer = MemoryWriter(reader, tokenizer, cfg.n_layers, writer_ratio(cfg.mode, cfg.ratio, cfg.memory_factor),
-                          cfg.lora_rank, sees_question=cfg.mode == "W5")
+    train_ex = load_examples(cfg.train, cfg.task)
+    dev_ex = load_examples(cfg.dev, cfg.task, cfg.dev_limit)
+    ratio = writer_ratio(cfg.mode, cfg.ratio, cfg.memory_factor)
+    if cfg.writer == "prompt":
+        if cfg.mode != "ME" or cfg.init_from:
+            raise ValueError("the prompt control runs in mode ME and starts from scratch (no init_from)")
+        n_prompt = math.ceil(cfg.chunk_tokens / ratio)
+        writer = PromptWriter(reader, tokenizer, ratio, cfg.chunk_tokens,
+                              prompt_init_ids([ex.context for ex in train_ex], tokenizer, n_prompt, cfg.seed))
+    elif cfg.writer == "layers":
+        writer = MemoryWriter(reader, tokenizer, cfg.n_layers, ratio, cfg.lora_rank, sees_question=cfg.mode == "W5")
+    else:
+        raise ValueError(f"unknown writer {cfg.writer!r}")
     if cfg.init_from:
         ckpt = torch.load(cfg.init_from, map_location="cpu", weights_only=False)
         shape = {k: ckpt["writer_config"][k] for k in writer.shape_config()}
@@ -200,10 +221,8 @@ def train(cfg: TrainConfig) -> Path:
                              f"({writer.shape_config()}); ME at r needs a stage-1 writer at r·f")
         writer.load_state_dict(ckpt["state_dict"])
     model = ViLatent(reader, tokenizer, template, writer, mode=cfg.mode, memory_factor=cfg.memory_factor,
-                     chunk_tokens=cfg.chunk_tokens)
-
-    train_ex = load_examples(cfg.train, cfg.task)
-    dev_ex = load_examples(cfg.dev, cfg.task, cfg.dev_limit)
+                     chunk_tokens=cfg.chunk_tokens,
+                     bm25=load_bm25_params(cfg.bm25_config) if cfg.mode == "ME" else None)
     teacher_train = teacher_dev = None
     if cfg.lambda_kl > 0:
         if not (cfg.teacher_train and cfg.teacher_dev):
@@ -218,7 +237,8 @@ def train(cfg: TrainConfig) -> Path:
     if cfg.gradient_checkpointing:
         kwargs = {"gradient_checkpointing_kwargs": {"use_reentrant": False}}
         reader.gradient_checkpointing_enable(**kwargs)
-        writer.body.gradient_checkpointing_enable(**kwargs)
+        if hasattr(writer, "body"):
+            writer.body.gradient_checkpointing_enable(**kwargs)
     reader.train()  # only to activate gradient checkpointing; the reader has no dropout and stays frozen
     writer.train()
     optimizer = torch.optim.AdamW(writer.param_groups(cfg.lr_adapter, cfg.lr_writer), weight_decay=cfg.weight_decay)
@@ -232,6 +252,9 @@ def train(cfg: TrainConfig) -> Path:
               quant=cfg.quant, trainable_params=sum(p.numel() for p in trainable), emb_norm=writer.emb_norm)
     stream = batches(len(train_ex), cfg.micro_batch, cfg.seed)
     best, t0, checked = float("inf"), time.time(), False
+    # recent speed: steps since the last train log, eval time excluded (the cumulative mean
+    # sec_per_step is inflated by the first step, which compiles the kernels)
+    t_recent, step_recent = t0, 0
     for step in range(cfg.steps):
         stats = {}
         for _ in range(accum):
@@ -239,7 +262,7 @@ def train(cfg: TrainConfig) -> Path:
             out = model.loss(batch, teacher_for(teacher_train, batch), cfg.lambda_kl)
             scaler.scale(out["loss"] / accum).backward()
             for k, v in out.items():
-                stats[k] = stats.get(k, 0.0) + float(v) / accum
+                stats[k] = stats.get(k, 0.0) + float(v.detach()) / accum
         scaler.unscale_(optimizer)
         if not checked:
             if fp16 and not grads_finite(trainable):
@@ -255,12 +278,16 @@ def train(cfg: TrainConfig) -> Path:
         optimizer.zero_grad(set_to_none=True)
 
         if step % cfg.log_every == 0 or step == cfg.steps - 1:
+            now = time.time()
             log.write(event="train", step=step + 1, lr_adapter=scheduler.get_last_lr()[0],
-                      grad_norm=grad_norm, scale=writer.scale.detach(), emb_norm=writer.emb_norm,
+                      grad_norm=grad_norm, scale=writer.scale.detach() if hasattr(writer, "scale") else None,
+                      emb_norm=writer.emb_norm,
                       loss_scale=scaler.get_scale() if fp16 else 1.0,
-                      sec_per_step=(time.time() - t0) / (step + 1),
+                      sec_per_step=(now - t0) / (step + 1),
+                      sec_per_step_recent=(now - t_recent) / (step + 1 - step_recent),
                       peak_mem_gb=torch.cuda.max_memory_allocated() / 2**30 if torch.cuda.is_available() else 0,
                       **stats)
+            t_recent, step_recent = now, step + 1
         if (step + 1) % cfg.eval_every == 0 or step == cfg.steps - 1:
             dev = dev_loss(model, dev_ex, teacher_dev, cfg)
             improved = dev["dev_loss"] < best
@@ -268,6 +295,7 @@ def train(cfg: TrainConfig) -> Path:
                 best = dev["dev_loss"]
                 model.save(out_dir / "best.pt", extra={"step": step + 1, **dev})
             log.write(event="eval", step=step + 1, best=improved, **dev)
+            t_recent, step_recent = time.time(), step + 1
     if not checked:  # fp16: every step was skipped, so the writer was never updated
         raise RuntimeError(f"fp16: no step out of {cfg.steps} had finite gradients; the writer was not trained")
     if best == float("inf"):

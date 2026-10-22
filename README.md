@@ -8,7 +8,8 @@ băng đọc các vector này qua `inputs_embeds`.
   thích "docs/VILATENT.md §…" trong mã trỏ tới tài liệu này.
 - [`docs/RUN_G0_G1.md`](docs/RUN_G0_G1.md): hướng dẫn chạy G0 và G1 trên máy GPU.
 - [`docs/ViLatent_g1.html`](docs/ViLatent_g1.html): sơ đồ huấn luyện và đánh giá G1 (mở bằng trình duyệt; bản lưu
-  của artifact "Sơ đồ huấn luyện ViLatent", ngày 16/10/2026).
+  của artifact "Sơ đồ huấn luyện ViLatent", ngày 16/10/2026, trước sửa đổi 22/10/2026: chưa có tập gate/select,
+  đối chứng prompt và seed 1).
 
 > Trạng thái: mã đã sẵn sàng cho **G0 và G1** (Qwen3.5-2B, ViQuAD, 4×), **chưa có kết quả thực nghiệm**. Hệ chính là
 > ViLatent-ME: bộ ghi không thấy câu hỏi (memory ghi một lần) cộng câu gốc chọn theo câu hỏi trong cùng ngân sách,
@@ -36,11 +37,13 @@ vilatent/            thư viện
   stats.py           bootstrap cặp theo seed × cụm đoạn văn, MDE, Holm
   leak.py            chỉ mục n-gram 13 âm tiết chống rò rỉ
   data.py            định dạng JSONL, sidecar provenance <file>.meta.json
-scripts/             prepare_viquad, build_corpus, make_pairs, leak_filter, generate_qa, filter_qa,
-                     render_template, g0_check, precompute_teacher, train, evaluate, select_me (chọn f theo
-                     loss dev), fallback_report (MEF), g1_report; run_g1.sh nối tất cả
+scripts/             prepare_viquad (tách theo bài), prepare_external_eval (MLQA, Belebele, VietNews để lọc rò
+                     rỉ), build_corpus, make_pairs, leak_filter, generate_qa, filter_qa, render_template,
+                     g0_check, tune_bm25, precompute_teacher, train, evaluate, choose_by_loss (chọn f* và lr của
+                     đối chứng theo loss trên select), fallback_report (MEF), g1_report; run_g1.sh nối tất cả
 configs/readers/     template đã render của từng reader (commit vào git; checkpoint và logit thầy gắn với hash của nó)
-configs/g1/          G1: giai đoạn 1 ở 4×/8×/16×/32×; giai đoạn 2 cho M, W5 và ME với f = 2, 4, 8
+configs/g1/          G1: giai đoạn 1 ở 4×/8×/16×/32×; giai đoạn 2 cho M, W5, ME với f = 2, 4, 8 và đối chứng prompt
+configs/bm25.json    k1, b của BM25, dò trên ViQuAD select trước G1 (mốc BM25 và câu gốc của ME)
 tests/               test CPU với Qwen3.5 ngẫu nhiên tí hon, không cần GPU hay tải mô hình
 ```
 
@@ -54,7 +57,7 @@ Python ≥ 3.10. Mỗi nhóm phụ thuộc là một extra:
 pip install -e ".[dev]"                          # lõi + test (CPU)
 pip install -e ".[model,data,baselines,teacher]" # reader, dữ liệu, LLMLingua-2, LLM thầy
 pip install -e ".[kernels]"                      # kernel Gated DeltaNet (Linux + CUDA), cần cho backward nhanh
-pytest -q                                        # 39 test, chạy trên CPU
+pytest -q                                        # 46 test, chạy trên CPU
 ```
 
 Qwen3.5 cần transformers có model type `qwen3_5` (đã thử với 5.12 và 5.16). Thiếu `flash-linear-attention` và
@@ -65,7 +68,7 @@ này. Trên Windows, đặt `PYTHONIOENCODING=utf-8` để in được tiếng V
 
 ```bash
 bash scripts/run_g1.sh data template g0                  # tuần 1–2: dữ liệu, template, cổng G0
-bash scripts/run_g1.sh teacher stage1 stage2 eval select fallback report  # tuần 3: cổng G1
+bash scripts/run_g1.sh teacher stage1 stage2 select stage2b eval fallback report  # tuần 3: cổng G1
 bash scripts/run_g1.sh qa_generate                        # QA sinh tự động (iCOMM 27B): máy trong mạng iCOMM, chỉ CPU
 bash scripts/run_g1.sh qa_download qa_filter              # cụm GPU, ngay sau G1: tải QA từ HF (repo private, cần HF_TOKEN), kiểm tra hai chiều
 bash scripts/smoke_g1.sh                                  # thử nhanh cả luồng ở quy mô nhỏ (vd. Kaggle 2× T4)
@@ -96,9 +99,10 @@ Những điểm `docs/VILATENT.md` chưa quy định, đã thống nhất với 
 | Chỗ nối prompt | Dấu cách sau "Đoạn văn:" thuộc về khe ngữ cảnh (ngữ cảnh được tokenize thành " " + văn bản), nên prompt ghép từ các đoạn trùng với prompt tokenize liền một lượt (đã kiểm trên 1.175/1.175 câu dev) |
 | G0 | Bắt buộc có kernel flash-linear-attention và causal-conv1d (Qwen3.5); checkpoint không được thiếu key nào |
 | Back end | Chỉ HF transformers ở G0/G1 (không dùng vLLM), một vòng giải mã greedy cho mọi phương pháp |
-| Tiêu chí G1 | Trên ViQuAD dev ở 4×: chênh lệch F1 (ViLatent-ME trừ mốc cứng tốt nhất) ≥ 3 **và** cận dưới CI 95% bootstrap theo đoạn > 0 **và** tỉ lệ không đọc được < 2% với ViLatent-ME và bốn mốc cứng (các phương pháp khác chỉ báo cáo). MDE in kèm tính cho kiểm định hai phía α = 0,05, power 80% |
-| Cơ chế đọc (sau tra cứu 16/10/2026) | Bộ ghi không thấy câu hỏi. ME: memory ở r·f + câu gốc BM25 nguyên văn ngay sau ⟨/mem⟩ (không nhãn) trong cùng k; giai đoạn 2 huấn luyện với câu gốc có sẵn. f ∈ {2, 4, 8} chọn theo loss dev, không theo F1 dev (tránh làm cổng lạc quan) |
-| Dự phòng MEF | Đọc lại toàn văn khi log-prob trung bình của câu trả lời ME < τ; τ là ngưỡng nhỏ nhất đạt ≥ 95% F1 toàn văn trên dev, đặt ở điểm giữa hai độ tự tin liền kề trên dev (mọi τ trong khoảng đó cho cùng kết quả dev), cố định cho test; chi phí tính cả lần đọc memory đầu |
+| Tách dữ liệu (22/10/2026) | Từ ViQuAD train tách theo bài: gate (16 bài, 1.228 câu, chỉ cho cổng) và select (6 bài, 621 câu, chọn checkpoint, f*, τ, lr của đối chứng, BM25). Dev của ViWord-C (chung bài với train) giữ ngoài train làm bảng phụ. Lọc rò rỉ thêm MLQA-vi, Belebele-vi, VietNews |
+| Tiêu chí G1 | Trên ViQuAD gate ở 4×, ME là f* gộp 2 seed: chênh lệch F1 với mốc cứng tốt nhất ≥ 3 **và** cận dưới CI 95% bootstrap (seed × đoạn) > 0 **và** cận dưới CI 95% của ME trừ đối chứng "prompt học được + BM25" > 0 **và** tỉ lệ không đọc được < 2% với ME và mốc cứng tốt nhất (sửa 22/10/2026). MDE in kèm tính cho kiểm định hai phía α = 0,05, power 80% |
+| Cơ chế đọc (sau tra cứu 16/10/2026) | Bộ ghi không thấy câu hỏi. ME: memory ở r·f + câu gốc BM25 nguyên văn ngay sau ⟨/mem⟩ (không nhãn) trong cùng k; giai đoạn 2 huấn luyện với câu gốc có sẵn. f ∈ {2, 4, 8} chọn theo loss trên ViQuAD select, tập tách bài với tập cổng |
+| Dự phòng MEF | Đọc lại toàn văn khi log-prob trung bình của câu trả lời ME < τ; τ là ngưỡng nhỏ nhất đạt ≥ 95% F1 toàn văn trên ViQuAD select, đặt ở điểm giữa hai độ tự tin liền kề (mọi τ trong khoảng đó cho cùng kết quả trên select), cố định cho gate và test; chi phí tính cả lần đọc memory đầu |
 | W5 | Bộ ghi thấy câu hỏi: [mồi][câu hỏi][khúc], bỏ trạng thái của mồi và câu hỏi, gộp như W0; dùng chung giai đoạn 1 với W0 ở cùng r |
 
 ## Kết quả

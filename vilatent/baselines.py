@@ -9,15 +9,18 @@ by ``budget.context_budget`` (the number of memory vectors of ViLatent at the sa
   bm25         rank sentences by BM25 against the question, keep the best that fit (only those
                sharing a syllable with the question, score > 0), fill the rest of the budget
                with the head of the best sentence that did not fit (cut at a reader token),
-               restore the original order
+               restore the original order. k1 and b come from configs/bm25.json, tuned on
+               ViQuAD select before G1 (scripts/tune_bm25.py); ViLatent-ME uses the same values
   llmlingua2   LLMLingua-2 (xlm-roberta-large), its ``rate`` binary-searched to land in
                [0.97·k, k] reader tokens
   full, none   full context and no context (upper and lower references, no budget)
 """
 from __future__ import annotations
 
+import json
 import math
 from collections import Counter
+from pathlib import Path
 
 from .text import split_sentences, syllables
 
@@ -114,14 +117,24 @@ def bm25_scores(query: str, documents: list[str], k1: float = 1.5, b: float = 0.
     return scores
 
 
+def load_bm25_params(path: str | Path) -> dict[str, float]:
+    """``{"k1", "b"}`` of a configs/bm25.json written by scripts/tune_bm25.py."""
+    with open(path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    return {"k1": float(cfg["k1"]), "b": float(cfg["b"])}
+
+
 class BM25Sentences:
     name = "bm25"
+
+    def __init__(self, k1: float = 1.5, b: float = 0.75):
+        self.k1, self.b = k1, b
 
     def compress(self, context, question, budget, counter):
         sentences = _sentences(context)
         if not sentences:
             return ""
-        scores = bm25_scores(question, sentences)
+        scores = bm25_scores(question, sentences, self.k1, self.b)
         order = sorted(range(len(sentences)), key=lambda i: (-scores[i], i))
 
         def render(keep: set[int], partial: tuple[int, str] | None = None) -> str:
@@ -185,11 +198,15 @@ class LLMLingua2:
         return best
 
 
-def build_baseline(name: str, device: str = "cuda"):
-    simple = {"full": Full, "none": NoContext, "truncation": Truncation, "lead": LeadSentences,
-              "bm25": BM25Sentences}
+def build_baseline(name: str, device: str = "cuda", bm25: dict | None = None):
+    """``bm25``: the tuned ``{"k1", "b"}`` (load_bm25_params), required for the bm25 baseline."""
+    simple = {"full": Full, "none": NoContext, "truncation": Truncation, "lead": LeadSentences}
     if name in simple:
         return simple[name]()
+    if name == "bm25":
+        if bm25 is None:
+            raise ValueError("the bm25 baseline needs its tuned parameters (configs/bm25.json)")
+        return BM25Sentences(**bm25)
     if name == "llmlingua2":
         return LLMLingua2(device)
     raise ValueError(f"unknown baseline {name!r}")

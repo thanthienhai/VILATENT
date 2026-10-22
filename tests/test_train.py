@@ -29,9 +29,12 @@ def test_train_two_steps(tokenizer, tmp_path, monkeypatch):
     assert set(load_teacher(teacher, template)) == {r["id"] for r in ROWS}
 
     monkeypatch.setattr(T, "load_reader", lambda name, **kwargs: (reader, tokenizer))
+    bm25 = tmp_path / "bm25.json"
+    bm25.write_text(json.dumps({"k1": 1.2, "b": 0.5}), encoding="utf-8")
     cfg = T.TrainConfig(reader="tiny", reader_config=str(cfg_path), task="qa", train=str(data), dev=str(data),
                         out_dir=str(tmp_path / "run"), teacher_train=str(teacher), teacher_dev=str(teacher),
-                        steps=2, effective_batch=4, micro_batch=2, eval_every=1, chunk_tokens=8)
+                        steps=2, effective_batch=4, micro_batch=2, eval_every=1, chunk_tokens=8,
+                        bm25_config=str(bm25))
     best = T.train(cfg)
     assert best.exists()
     events = [json.loads(line)["event"] for line in open(tmp_path / "run" / "metrics.jsonl", encoding="utf-8")]
@@ -46,3 +49,15 @@ def test_train_two_steps(tokenizer, tmp_path, monkeypatch):
     me = T.train(dataclasses.replace(cfg, mode="ME", out_dir=str(tmp_path / "me"), steps=1))
     ckpt = torch.load(me, weights_only=False)
     assert ckpt["mode"] == "ME" and ckpt["writer_config"]["ratio"] == 8
+    assert ckpt["bm25"] == {"k1": 1.2, "b": 0.5}  # the tuned values travel with the checkpoint
+    # the learned-prompt control: mode ME, from scratch, loaded back as a PromptWriter
+    with pytest.raises(ValueError, match="from scratch"):
+        T.train(dataclasses.replace(cfg, mode="ME", writer="prompt", init_from=str(best), steps=1,
+                                    out_dir=str(tmp_path / "bad2")))
+    prompt = T.train(dataclasses.replace(cfg, mode="ME", writer="prompt", out_dir=str(tmp_path / "pe"), steps=1,
+                                         lr_adapter=1e-3))
+    from vilatent.model import load_vilatent
+    from vilatent.writer import PromptWriter
+
+    loaded = load_vilatent(prompt, reader, tokenizer, template)
+    assert isinstance(loaded.writer, PromptWriter) and loaded.mode == "ME" and loaded.bm25 == {"k1": 1.2, "b": 0.5}

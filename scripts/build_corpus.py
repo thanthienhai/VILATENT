@@ -1,15 +1,20 @@
 """Stage-1 document pool: Vietnamese Wikipedia + BKAINewsCorpus, leak-filtered.
 
 Leak control (docs/VILATENT.md §Dữ liệu, "Chống rò rỉ"):
-  1. every Wikipedia article whose title is the title of a dev/test passage is removed;
-  2. every document sharing a 13-syllable n-gram with a dev/test context is removed.
-Both checks use the evaluation files given with --eval-files (all dev and test files).
+  1. every Wikipedia article whose title is the title of an evaluation passage (ViQuAD gate,
+     select, ViWord-C dev and test; MLQA) is removed;
+  2. every document sharing a 13-syllable n-gram with an evaluation context is removed.
+Both checks use the evaluation files given with --eval-files (every evaluation file, including
+those of scripts/prepare_external_eval.py).
 
 Documents are streamed with a shuffle buffer and kept when they are long enough to give one
-(A, B) pair (scripts/make_pairs.py). Output rows: {id, source, title, text}.
+(A, B) pair (scripts/make_pairs.py). Output rows: {id, source, title, text}. The documents
+removed by 1 or 2 are listed in <out stem>.dropped.jsonl ({id, source, title, reason}), so that
+scripts/filter_qa.py can drop the generated questions of those documents. Every long-enough
+Wikipedia article is visited (fewer than --n-wiki exist), so the list is complete for them.
 
 Usage:
-  python scripts/build_corpus.py --eval-files data/tasks/viquad_dev.jsonl data/tasks/viquad_test.jsonl \
+  python scripts/build_corpus.py --eval-files data/tasks/viquad_gate.jsonl ... data/eval_ext/vietnews_test.jsonl \
       --n-wiki 200000 --n-news 200000 --out data/corpus/docs.jsonl
 """
 import argparse
@@ -22,7 +27,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from vilatent.data import read_jsonl, write_meta
-from vilatent.leak import LeakIndex
+from vilatent.leak import LeakIndex, read_contexts
 from vilatent.text import normalize
 
 WIKI = ("wikimedia/wikipedia", "20231101.vi")
@@ -50,10 +55,11 @@ def main():
     titles = {normalize(r["title"]).casefold() for r in eval_rows if r.get("title")}
     if not titles:
         raise SystemExit("no titles in the evaluation files: run scripts/prepare_viquad.py first")
-    index = LeakIndex(list({r["context"] for r in eval_rows}))
+    index = LeakIndex(read_contexts(args.eval_files))
     dropped = Counter()
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
+    dropped_path = Path(args.out).with_suffix(".dropped.jsonl")
+    with open(args.out, "w", encoding="utf-8") as f, open(dropped_path, "w", encoding="utf-8") as fd:
         for source, (name, config), target in (("wiki", WIKI, args.n_wiki), ("news", NEWS, args.n_news)):
             kept = 0
             bar = tqdm(total=target, desc=source)
@@ -63,11 +69,12 @@ def main():
                 if len(text) < args.min_chars:
                     dropped[(source, "short")] += 1
                     continue
-                if source == "wiki" and title.casefold() in titles:
-                    dropped[(source, "eval_title")] += 1
-                    continue
-                if index.leaks(text):
-                    dropped[(source, "ngram")] += 1
+                reason = ("eval_title" if source == "wiki" and title.casefold() in titles
+                          else "ngram" if index.leaks(text) else None)
+                if reason:
+                    dropped[(source, reason)] += 1
+                    fd.write(json.dumps({"id": f"{source}-{r['id']}", "source": source, "title": title,
+                                         "reason": reason}, ensure_ascii=False) + "\n")
                     continue
                 f.write(json.dumps({"id": f"{source}-{r['id']}", "source": source, "title": title, "text": text},
                                    ensure_ascii=False) + "\n")
@@ -78,7 +85,7 @@ def main():
             bar.close()
     stats = {f"{s}/{reason}": n for (s, reason), n in dropped.items()}
     write_meta(args.out, sources={"wiki": "/".join(WIKI), "news": NEWS[0]}, eval_files=args.eval_files,
-               eval_titles=len(titles), dropped=stats)
+               eval_titles=len(titles), eval_ngrams=len(index), dropped=stats, dropped_list=dropped_path.name)
     print(json.dumps(stats, indent=2))
 
 

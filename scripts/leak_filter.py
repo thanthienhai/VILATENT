@@ -5,14 +5,14 @@ train, generated QA. The fields checked are those present among context, target,
 
 Usage:
   python scripts/leak_filter.py --input data/tasks/viquad_train.jsonl \
-      --eval-files data/tasks/viquad_dev.jsonl data/tasks/viquad_test.jsonl \
+      --eval-files data/tasks/viquad_gate.jsonl ... data/eval_ext/vietnews_test.jsonl \
       --out data/tasks/viquad_train_clean.jsonl
 """
 import argparse
 import json
 
 from vilatent.data import read_jsonl, write_jsonl, write_meta
-from vilatent.leak import LeakIndex
+from vilatent.leak import LeakIndex, read_contexts
 
 FIELDS = ("context", "target", "question")
 
@@ -24,7 +24,7 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    index = LeakIndex(list({r["context"] for path in args.eval_files for r in read_jsonl(path)}))
+    index = LeakIndex(read_contexts(args.eval_files))
     rows = read_jsonl(args.input)
     kept = [r for r in rows if not any(index.leaks(r[f]) for f in FIELDS if f in r)]
     write_jsonl(args.out, kept)

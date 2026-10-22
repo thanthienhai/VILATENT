@@ -26,7 +26,7 @@ Hai việc G2 **không** quyết định:
 | --- | --- |
 | f* (hệ số memory chọn theo loss dev) | Cấu hình gốc của mọi ablation: ViLatent-ME ở 4× với f*, bộ ghi W0, L = 4, O-LM, γ = 0 |
 | `runs/g1_stage1_r{4·f*}/best.pt`, `runs/g1_stage2_me_f{f*}_r4/best.pt` | Điểm gốc O-LM; không chạy lại |
-| `results/g1_dev/*.jsonl` (kết quả từng câu) | Tính MDE (mục 4, D5) |
+| `results/g1/gate/*.jsonl` (kết quả từng câu) | Tính MDE (mục 4, D5) |
 | `sec_per_step`, `peak_mem_gb` của 9 lượt | Chỉnh lại ước lượng GPU ở mục 6 |
 | `data/` (corpus, cặp giai đoạn 1, logit thầy, ViQuAD đã lọc) | Dùng lại nguyên vẹn |
 | W5, nếu bị dời khỏi G1 vì thiếu GPU | Chạy trong tuần 5 cùng các lượt giai đoạn 2 |
@@ -53,9 +53,9 @@ cụm, ngay sau G1 (`docs/RUN_G0_G1.md` mục 5): `HF_TOKEN=<token đọc đư�
 `QA_REVISION` (mặc định `28e3ac26`, bản prompt 3) và dừng nếu SHA-256 không khớp file meta.
 
 Endpoint `http://172.16.9.11:30049/v1` đo ngày 21/10/2026: khoảng 1,85 request/s, bão hoà từ 16 luồng, nên 20.000
-đoạn mất khoảng 3 giờ. Khảo sát 5.917 câu của prompt đầu (so với ViQuAD dev):
+đoạn mất khoảng 3 giờ. Khảo sát 5.917 câu của prompt đầu (so với dev của ViWord-C):
 
-| Chỉ số | ViQuAD dev | Prompt đầu |
+| Chỉ số | Dev của ViWord-C | Prompt đầu |
 | --- | --- | --- |
 | Đáp án, trung vị số âm tiết | 6 | 3 |
 | Câu hỏi chép câu chứa đáp án (≥ 80% âm tiết trùng) | 10,2% (train 10,5%) | 25,3% |
@@ -121,7 +121,7 @@ Sau khi lọc:
   logit thầy cũng lấy từ reader không có memory. Không cần gán nhãn.
 - `scripts/make_offcontext.py` ghi `data/offctx/{train,dev}.jsonl`; `scripts/precompute_teacher.py` thêm chế độ
   không có ngữ cảnh.
-- Chạy `leak_filter.py` trên dữ liệu này với tập đánh giá là ViQuAD dev/test và Vi-MQA.
+- Chạy `leak_filter.py` trên dữ liệu này với mọi tập đánh giá của `run_g1.sh` (`EVAL_FILES`) cộng Vi-MQA.
 
 **D5. MDE.** `scripts/mde_report.py` đọc kết quả từng câu của G1, tính sai số chuẩn của chênh lệch cặp (ViLatent-ME
 trừ mốc cứng tốt nhất) bằng bootstrap theo cụm đoạn, rồi suy ra MDE cho ViQuAD test (2.653 câu / 557 đoạn) và MLQA
@@ -156,7 +156,7 @@ Q10. Việc này phải làm trước C1, C4, C5.
 
 - `train.py`: mỗi micro-batch lấy mẫu ngoài tài liệu với xác suất sao cho khoảng γ số token có giám sát đến từ
   `data/offctx/train.jsonl`; `TrainConfig` thêm `offcontext`, `teacher_offcontext`, `gamma`.
-- Loss dev giữ nguyên trên ViQuAD dev (để so được với γ = 0), và log thêm loss dev riêng trên `data/offctx/dev.jsonl`.
+- Loss dev giữ nguyên trên ViQuAD select (để so được với γ = 0), và log thêm loss dev riêng trên `data/offctx/dev.jsonl`.
 
 **C5. Đánh giá ngoài tài liệu.** `scripts/evaluate_offcontext.py`:
 
@@ -168,7 +168,7 @@ Q10. Việc này phải làm trước C1, C4, C5.
 
 **C6. Báo cáo G2.** `scripts/g2_report.py`:
 
-- Bảng ablation: loss dev giai đoạn 2, F1/EM ViQuAD dev ở 4×, chênh lệch so với cấu hình gốc kèm CI 95% bootstrap theo
+- Bảng ablation: loss giai đoạn 2 trên ViQuAD select, F1/EM ViQuAD gate ở 4×, chênh lệch so với cấu hình gốc kèm CI 95% bootstrap theo
   đoạn, tỉ lệ không đọc được.
 - Bảng ngoài tài liệu: Vi-MQA (không memory, M, ME) kèm chênh lệch và CI bootstrap theo câu; IFEval-vi.
 - Cấu hình được chốt theo quy tắc ở Q3, in `G2_pass` và `G2: PASS/FAIL`, ghi `results/g2_dev/g2.json`.
@@ -197,7 +197,7 @@ Mỗi ablation đổi **một** yếu tố so với cấu hình gốc.
 | Cấu hình chốt | Gộp các lựa chọn thắng (nếu khác gốc) | 0–1 | 1 |
 | W5 (nếu dời từ G1) | — | dùng lại G1 | 1 |
 
-Tổng: 3–4 lượt giai đoạn 1 và 8–9 lượt giai đoạn 2. Mỗi lượt giai đoạn 2 được đánh giá trên ViQuAD dev (1.175 câu) và
+Tổng: 3–4 lượt giai đoạn 1 và 8–9 lượt giai đoạn 2. Mỗi lượt giai đoạn 2 được đánh giá trên ViQuAD gate (1.228 câu) và
 Vi-MQA; IFEval-vi chỉ chạy cho cấu hình gốc, các lượt γ và cấu hình chốt.
 
 ## 6. Ước lượng GPU
@@ -209,7 +209,7 @@ Ngoại suy từ ước lượng của G1 (chưa có số đo H100); chỉnh l�
 | Giai đoạn 1: O-AE (đích dài, 1,5–2 lần một bước O-LM), L = 8, W1 | 3–5 |
 | Giai đoạn 2: 8–9 lượt | 2–5 |
 | Sinh đích và logit thầy cho dữ liệu γ | 0,5–1 |
-| Đánh giá: ViQuAD dev, Vi-MQA, IFEval-vi | 2–4 |
+| Đánh giá: ViQuAD gate, Vi-MQA, IFEval-vi | 2–4 |
 | Smoke test trên máy chạy | 0,5 |
 | **Tổng** | **khoảng 8–16 giờ** (gấp đôi nếu Q1 chọn giai đoạn 1 dài 5.000 bước) |
 
@@ -233,12 +233,12 @@ sẽ lùi tuần 7–9.
 | --- | --- | --- |
 | Q1 | Số bước giai đoạn 1 ở G2: giữ 2.500 như G1 hay dùng mức đầy đủ 5.000–10.000 của docs/VILATENT.md? | Giữ 2.500, để so trực tiếp với gốc của G1 và dùng lại checkpoint; mức đầy đủ để dành cho 9B |
 | Q2 | Ablation chỉ ở 4× hay cả 8×, 16×? | Chỉ 4× (cùng ngân sách với G1); 8× và 16× chạy ở 9B |
-| Q3 | Quy tắc chốt cấu hình | L và W1 chọn theo loss dev giai đoạn 2 trên ViQuAD (như cách chọn f ở G1, không chọn theo F1 dev để G3 không bị lạc quan); γ là giá trị nhỏ nhất đạt tiêu chí Vi-MQA; O-AE không chọn (cả hai nhánh lên 9B) |
+| Q3 | Quy tắc chốt cấu hình | L và W1 chọn theo loss giai đoạn 2 trên ViQuAD select (như cách chọn f ở G1; select tách bài với gate nên G3 không bị lạc quan); γ là giá trị nhỏ nhất đạt tiêu chí Vi-MQA; O-AE không chọn (cả hai nhánh lên 9B) |
 | Q4 | O-AE trộn với O-LM thế nào? | Mỗi mẫu giai đoạn 1 nhận ngẫu nhiên một trong hai mục tiêu, tỉ lệ 50 : 50, λ_AE = 1; chi phí mỗi bước gần như cũ. Cách khác: cộng cả hai loss trên mỗi mẫu (chi phí gấp đôi) |
 | Q5 | W1: ranh giới âm tiết hay từ (VnCoreNLP, cần Java)? ME có dùng W1 không? | Âm tiết theo dấu cách (không thêm phụ thuộc); thử ở ME vì đó là hệ chính |
 | Q6 | Nguồn "chỉ dẫn chung" trong dữ liệu γ | Chỉ dùng câu hỏi ViQuAD của đoạn khác ở lần này; nếu thêm chỉ dẫn chung thì lấy từ một bộ dữ liệu chỉ dẫn tiếng Việt có giấy phép rõ, không lấy từ VMLU hay IFEval |
 | Q7 | Chấm Vi-MQA bằng cách nào? | So log-prob của các nhãn A/B/C/D ở token trả lời đầu tiên: tất định, không có câu trả lời không đọc được. Cách khác: sinh greedy rồi tách nhãn |
-| Q8 | Memory lạ lấy từ đâu? | Một đoạn ViQuAD dev ngẫu nhiên khác bài, cố định bằng seed 0, nén ở 4× |
+| Q8 | Memory lạ lấy từ đâu? | Một đoạn ViQuAD select ngẫu nhiên khác bài, cố định bằng seed 0, nén ở 4× |
 | Q9 | Tiêu chí G2 tính bằng ước lượng điểm hay cận CI? | Ước lượng điểm của mức tụt ≤ 2 điểm, kèm CI 95% và MDE. Với vài trăm câu có nhãn, cận trên CI ≤ 2 gần như không thể đạt |
 | Q10 | Giữ hash template của G1 khi thêm tác vụ mới | Băm theo từng tác vụ: checkpoint và logit thầy kiểm hash của đúng tác vụ chúng dùng. Cách khác: một file cấu hình template riêng cho G2 |
 | Q11 | Số seed ở G2 | Một seed; ba seed dành cho 9B |

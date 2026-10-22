@@ -34,7 +34,7 @@ if [ "$SMOKE_SHORT" = 1 ]; then
   # 16 steps: in fp16 the GradScaler skips the first ~9 (overflow at its initial scale), and
   # training fails when no step updated the writer
   : "${TRAIN_ARGS:=--steps 16 --eval-every 8 --effective-batch 4 --micro-batch 2 --dev-limit 8}"
-  : "${SMOKE_TRAIN_QA:=64}" "${SMOKE_DEV_QA:=24}" "${SKIP_G0:=1}"
+  : "${SMOKE_TRAIN_QA:=64}" "${SMOKE_DEV_QA:=40}" "${SKIP_G0:=1}"
 fi
 SKIP_G0=${SKIP_G0:-0}
 
@@ -49,7 +49,7 @@ SMOKE_9B=${SMOKE_9B:-0}
 export TRAIN_ARGS=${TRAIN_ARGS:-"--steps 20 --eval-every 10 --effective-batch 8 --micro-batch 2 --dev-limit 20"}
 export EVAL_ARGS=${EVAL_ARGS:-"--batch-size 8"}
 SMOKE_TRAIN_QA=${SMOKE_TRAIN_QA:-400}   # ViQuAD train questions kept
-SMOKE_DEV_QA=${SMOKE_DEV_QA:-60}        # ViQuAD dev questions kept (whole passages come first in the file)
+SMOKE_DEV_QA=${SMOKE_DEV_QA:-60}        # questions kept in each of gate, select and ViWord-C dev
 SMOKE_QA=${SMOKE_QA:-0}
 SMOKE_QA_ROWS=${SMOKE_QA_ROWS:-500}     # auto-generated questions sent through qa_filter
 RUN="bash scripts/run_g1.sh"
@@ -57,10 +57,15 @@ RUN="bash scripts/run_g1.sh"
 log() { echo "[$(date '+%F %T')] smoke: $*"; }
 
 $RUN data
-log "shrink ViQuAD train to $SMOKE_TRAIN_QA and dev to $SMOKE_DEV_QA questions"
-for f in "viquad_train_clean $SMOKE_TRAIN_QA" "viquad_dev $SMOKE_DEV_QA"; do
+log "shrink ViQuAD train to $SMOKE_TRAIN_QA and gate, select, ViWord-C dev to $SMOKE_DEV_QA questions"
+# every k-th row, so that the small files keep several articles (swapped memory and the
+# article-cluster bootstrap need more than one)
+for f in "viquad_train_clean $SMOKE_TRAIN_QA" "viquad_gate $SMOKE_DEV_QA" "viquad_select $SMOKE_DEV_QA" \
+         "viquad_viwordc_dev $SMOKE_DEV_QA"; do
   set -- $f
-  head -n "$2" "data/tasks/$1.jsonl" > "data/tasks/$1.small" && mv "data/tasks/$1.small" "data/tasks/$1.jsonl"
+  step=$(( ($(wc -l < "data/tasks/$1.jsonl") + $2 - 1) / $2 ))
+  awk -v s="$step" '(NR - 1) % s == 0' "data/tasks/$1.jsonl" | head -n "$2" > "data/tasks/$1.small"
+  mv "data/tasks/$1.small" "data/tasks/$1.jsonl"
 done
 
 $RUN template
@@ -72,7 +77,7 @@ else
     G0_READERS=Qwen/Qwen3.5-9B G0_ARGS=--no-writer-layer-grad $RUN g0 || log "G0 9B FAILED (continuing)"
   fi
 fi
-$RUN teacher stage1 stage2 eval select fallback report
+$RUN teacher stage1 stage2 select stage2b eval fallback report
 if [ "$SMOKE_QA" = 1 ]; then
   $RUN qa_download
   log "shrink the auto-generated QA to its first $SMOKE_QA_ROWS rows"
@@ -82,4 +87,4 @@ else
   log "qa_download and qa_filter skipped (SMOKE_QA=1 runs them)"
 fi
 
-log "done; G0 report(s) in results/g0, G1 pipeline output in results/g1_dev, filtered QA in data/qa_gen"
+log "done; G0 report(s) in results/g0, G1 pipeline output in results/g1, filtered QA in data/qa_gen"

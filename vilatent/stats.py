@@ -50,12 +50,16 @@ def bootstrap_mean(values, clusters: list, seeds: list | None = None, n_boot: in
 
 def paired_test(a, b, clusters: list, seeds: list | None = None, n_boot: int = 10_000,
                 seed: int = 0) -> dict:
-    """Mean difference a − b on the same rows, its 95% CI, and the one-sided bootstrap p-value
-    for a > b (share of bootstrap means ≤ 0)."""
+    """Mean difference a − b on the same rows, its 95% percentile CI, and the one-sided
+    bootstrap p-value for H1: a > b. The p-value comes from the bootstrap distribution shifted
+    to the null (mean 0): the share of centered bootstrap means at least as large as the
+    observed difference (Efron & Tibshirani 1993, §16.4). The share of bootstrap means ≤ 0
+    used before is not a p-value under H0."""
     diff = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
     boot = bootstrap_mean(diff, clusters, seeds, n_boot, seed)
-    return {"diff": float(diff.mean()), "ci_low": float(np.percentile(boot, 2.5)),
-            "ci_high": float(np.percentile(boot, 97.5)), "p_one_sided": float((boot <= 0).mean()),
+    observed = float(diff.mean())
+    return {"diff": observed, "ci_low": float(np.percentile(boot, 2.5)),
+            "ci_high": float(np.percentile(boot, 97.5)), "p_one_sided": float(((boot - observed) >= observed).mean()),
             "se": float(boot.std()), "n": int(len(diff)), "n_clusters": len(set(clusters))}
 
 

@@ -3,20 +3,24 @@ per (method, ratio).
 
 Methods: full, none, truncation, lead, bm25, llmlingua2, and ``vilatent:<checkpoint>``. A
 ViLatent run uses the mode and budget ratio it was trained for (--ratios is ignored for it) and
-is named ``vilatent_<mode>`` (vilatent_m, vilatent_w5, and vilatent_me_f<f> for ME) unless
-``name=`` follows after a comma, e.g. ``vilatent:runs/g1_stage2_me_f2_r4/best.pt,name=vilatent_me_s1``.
+is named ``vilatent_<mode>`` (vilatent_m, vilatent_w5, and vilatent_me_f<f> for ME;
+prompt_bm25_f<f> for the learned-prompt control) unless ``name=`` follows after a comma, e.g.
+``vilatent:runs/g1_stage2_me_f2_s1_r4/best.pt,name=vilatent_me_f2_s1``. ``swap=<seed>`` reads every
+question with another passage's memory (vilatent.evaluate.swap_memories) and adds ``_swap`` to
+the name. The bm25 baseline uses --bm25-config; an ME checkpoint must have been trained with the
+same values (its sentences are the bm25 baseline's at a smaller budget).
 
 Usage:
   python scripts/evaluate.py --reader Qwen/Qwen3.5-2B --reader-config configs/readers/qwen3.5-2b.json \
-      --data data/tasks/viquad_dev.jsonl --ratios 4 \
+      --data data/tasks/viquad_gate.jsonl --ratios 4 \
       --methods full none truncation lead bm25 llmlingua2 vilatent:runs/g1_stage2_me_f2_r4/best.pt \
-      --out-dir results/g1_dev
+      --out-dir results/g1/gate
 """
 import argparse
 import json
 from pathlib import Path
 
-from vilatent.baselines import build_baseline
+from vilatent.baselines import build_baseline, load_bm25_params
 from vilatent.data import load_examples, write_jsonl
 from vilatent.evaluate import evaluate_text, evaluate_vilatent, summarize
 from vilatent.model import load_vilatent
@@ -43,6 +47,7 @@ def main():
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--bm25-config", default="configs/bm25.json", help="tuned k1, b (scripts/tune_bm25.py)")
     ap.add_argument("--dtype", choices=list(DTYPES), default="bfloat16", help="float16 on GPUs without bf16 (T4)")
     ap.add_argument("--quant", choices=list(QUANTS), default="none", help="int4 reader: T4 smoke test only")
     args = ap.parse_args()
@@ -55,15 +60,22 @@ def main():
     for spec in args.methods:
         if spec.startswith("vilatent:"):
             path, _, opts = spec.removeprefix("vilatent:").partition(",")
+            opts = dict(o.split("=", 1) for o in opts.split(",") if o)
+            swap = int(opts["swap"]) if "swap" in opts else None
             model = load_vilatent(path, reader, tokenizer, template)
-            default = f"vilatent_{model.mode.lower()}" + (f"_f{model.memory_factor}" if model.mode == "ME" else "")
-            name = dict(o.split("=", 1) for o in opts.split(",") if o).get("name", default)
+            kind = "prompt_bm25" if model.writer.config().get("kind") == "prompt" else f"vilatent_{model.mode.lower()}"
+            default = (kind + (f"_f{model.memory_factor}" if model.mode == "ME" else "")
+                       + ("_swap" if swap is not None else ""))
+            name = opts.get("name", default)
             if model.chunk_tokens != args.chunk_tokens:  # budgets of all methods must use the same chunks
                 raise SystemExit(f"{path} uses chunks of {model.chunk_tokens} tokens, not {args.chunk_tokens}")
-            save(evaluate_vilatent(model, examples, args.batch_size, method=name), out_dir, name, model.budget_ratio)
+            if model.mode == "ME" and model.bm25 != load_bm25_params(args.bm25_config):
+                raise SystemExit(f"{path} was trained with BM25 {model.bm25}, not those of {args.bm25_config}")
+            save(evaluate_vilatent(model, examples, args.batch_size, method=name, swap_seed=swap), out_dir, name,
+                 model.budget_ratio)
             del model
             continue
-        baseline = build_baseline(spec)
+        baseline = build_baseline(spec, bm25=load_bm25_params(args.bm25_config) if spec == "bm25" else None)
         ratios = [None] if spec in ("full", "none") else args.ratios
         for ratio in ratios:
             rows = evaluate_text(reader, tokenizer, template, baseline, examples, ratio, args.chunk_tokens,

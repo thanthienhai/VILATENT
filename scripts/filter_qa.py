@@ -1,6 +1,9 @@
 """Filter auto-generated QA, in this order:
 
-1. Leak filter against the evaluation files.
+1. Leak filter: drop the questions of a document that scripts/build_corpus.py removed from
+   the corpus (Wikipedia article of an evaluation passage, or 13-gram overlap; --dropped-docs,
+   since the questions were generated from an earlier corpus), then the questions whose
+   paragraph or question shares a 13-gram with an evaluation context (--eval-files).
 2. Rules (survey of 21/10/2026): drop a question that contains its answer (as whole syllables,
    e.g. "Đoạn văn đề cập đến loài cây nào?" -> "cây"), and a "number" question whose answer
    has no digit, number word or Roman numeral (the teacher labels "ATP" or "thời trung cổ"
@@ -21,7 +24,8 @@ generated data.
 Usage:
   python scripts/filter_qa.py --input data/qa_gen/qa_raw.jsonl --reader Qwen/Qwen3.5-2B \
       --reader-config configs/readers/qwen3.5-2b.json \
-      --eval-files data/tasks/viquad_dev.jsonl data/tasks/viquad_test.jsonl --out data/qa_gen/qa_clean.jsonl
+      --eval-files data/tasks/viquad_gate.jsonl ... data/eval_ext/vietnews_test.jsonl \
+      --dropped-docs data/corpus/docs.dropped.jsonl --out data/qa_gen/qa_clean.jsonl
 """
 import argparse
 import json
@@ -31,7 +35,7 @@ from collections import Counter
 from vilatent.baselines import Full
 from vilatent.data import Example, read_jsonl, write_jsonl, write_meta
 from vilatent.evaluate import evaluate_text
-from vilatent.leak import LeakIndex
+from vilatent.leak import LeakIndex, read_contexts
 from vilatent.reader import DTYPES, QUANTS, load_reader
 from vilatent.template import ReaderTemplate, load_reader_config
 from vilatent.text import contains_syllables, has_number, question_overlap
@@ -60,6 +64,7 @@ def main():
     ap.add_argument("--reader", required=True)
     ap.add_argument("--reader-config", required=True)
     ap.add_argument("--eval-files", nargs="+", required=True)
+    ap.add_argument("--dropped-docs", required=True, help="<corpus>.dropped.jsonl of scripts/build_corpus.py")
     ap.add_argument("--threshold", type=float, default=0.8)
     ap.add_argument("--reference", default="data/tasks/viquad_train.jsonl", help="human QA whose copy share is matched")
     ap.add_argument("--copy-overlap", type=float, default=0.8)
@@ -72,8 +77,10 @@ def main():
 
     rows = [r for r in read_jsonl(args.input) if not r.get("empty")]
     n_input = len(rows)
-    index = LeakIndex(list({r["context"] for path in args.eval_files for r in read_jsonl(path)}))
-    leaked = {r["id"] for r in rows if index.leaks(r["context"]) or index.leaks(r["question"])}
+    dropped_docs = {r["id"] for r in read_jsonl(args.dropped_docs)}
+    from_dropped = {r["id"] for r in rows if r["doc_id"] in dropped_docs}
+    index = LeakIndex(read_contexts(args.eval_files))
+    leaked = from_dropped | {r["id"] for r in rows if index.leaks(r["context"]) or index.leaks(r["question"])}
     rows = [r for r in rows if r["id"] not in leaked]
     rule_rejected = Counter(filter(None, map(rule_reject, rows)))
     rows = [r for r in rows if rule_reject(r) is None]
@@ -101,13 +108,14 @@ def main():
     by_type = Counter(r["answer_type"] for r in rows)
     kept_by_type = Counter(r["answer_type"] for r in kept)
     rejection = 1 - len(checked) / max(1, len(rows))
-    stats = {"n_input": n_input, "leaked": len(leaked), "rule_rejected": dict(rule_rejected), "checked": len(rows),
+    stats = {"n_input": n_input, "leaked": len(leaked), "from_dropped_docs": len(from_dropped),
+             "rule_rejected": dict(rule_rejected), "checked": len(rows),
              "passed_reader": len(checked), "rejection_rate": rejection,
              "copies": len(copies), "copies_kept": n_copies, "reference_copy_share": ref_share, "kept": len(kept),
              "kept_share_by_type": {t: kept_by_type[t] / by_type[t] for t in by_type}}
-    write_meta(args.out, input=args.input, reader=args.reader, template_hash=template.hash,
-               f1_threshold=args.threshold, reference=args.reference, copy_overlap=args.copy_overlap,
-               seed=args.seed, **stats)
+    write_meta(args.out, input=args.input, eval_files=args.eval_files, dropped_docs=args.dropped_docs,
+               reader=args.reader, template_hash=template.hash, f1_threshold=args.threshold,
+               reference=args.reference, copy_overlap=args.copy_overlap, seed=args.seed, **stats)
     print(json.dumps(stats, indent=2, ensure_ascii=False))
     if rejection > REJECTION_ALERT:
         print(f"WARNING: {rejection:.0%} rejected by the reader (> {REJECTION_ALERT:.0%}): check 200 samples by "

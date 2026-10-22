@@ -8,6 +8,9 @@
   W5   writer that sees the question ([sink][question][chunk]) at ratio r; memory is written
        again for every question
 
+The control "learned prompt + BM25" is mode ME with a writer.PromptWriter in place of the
+W0 writer: the same vectors, sentences and training, but memory that ignores the context.
+
 Reader input:
 
     [prefix ids] ⟨mem⟩ m_1 … m_k ⟨/mem⟩ [evidence ids, ME] [suffix ids, with the question] [target ids]
@@ -28,7 +31,7 @@ from .data import Example
 from .losses import ce_kl_loss
 from .reader import embed_ids, eos_ids, greedy_generate
 from .template import ReaderTemplate
-from .writer import MemoryWriter
+from .writer import MemoryWriter, build_writer
 
 MODES = ("M", "ME", "W5")
 
@@ -58,7 +61,10 @@ def writer_ratio(mode: str, budget_ratio: int, memory_factor: int = 2) -> int:
 
 class ViLatent:
     def __init__(self, reader, tokenizer, template: ReaderTemplate, writer: MemoryWriter, mode: str = "M",
-                 memory_factor: int = 2, chunk_tokens: int = DEFAULT_CHUNK_TOKENS, max_chunks_per_pass: int = 64):
+                 memory_factor: int = 2, chunk_tokens: int = DEFAULT_CHUNK_TOKENS, max_chunks_per_pass: int = 64,
+                 bm25: dict | None = None):
+        """``bm25``: ``{"k1", "b"}`` of the sentence selector, required in ME (the values tuned
+        for the bm25 baseline, configs/bm25.json); saved with the checkpoint."""
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
         if writer.sees_question != (mode == "W5"):
@@ -70,7 +76,10 @@ class ViLatent:
         self.chunk_tokens, self.max_chunks_per_pass = chunk_tokens, max_chunks_per_pass
         self.budget_ratio = writer.ratio // self.memory_factor
         self.stop_ids = eos_ids(reader, template.eos_id)
-        self.selector = BM25Sentences()
+        if mode == "ME" and bm25 is None:
+            raise ValueError("ME needs the BM25 parameters of the bm25 baseline (configs/bm25.json)")
+        self.bm25 = bm25
+        self.selector = BM25Sentences(**bm25) if bm25 else None
 
     @property
     def device(self) -> torch.device:
@@ -192,15 +201,15 @@ class ViLatent:
         torch.save({"writer_config": self.writer.config(), "state_dict": self.writer.state_dict(),
                     "mode": self.mode, "memory_factor": self.memory_factor,
                     "reader": self.template.cfg["reader"], "template_hash": self.template.hash,
-                    "chunk_tokens": self.chunk_tokens, **(extra or {})}, path)
+                    "chunk_tokens": self.chunk_tokens, "bm25": self.bm25, **(extra or {})}, path)
 
 
 def load_vilatent(path: str | Path, reader, tokenizer, template: ReaderTemplate) -> ViLatent:
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     if ckpt["template_hash"] != template.hash:
         raise ValueError(f"{path} was trained with another reader template ({ckpt['template_hash']})")
-    writer = MemoryWriter(reader, tokenizer, **ckpt["writer_config"])
+    writer = build_writer(reader, tokenizer, ckpt["writer_config"])
     writer.load_state_dict(ckpt["state_dict"])
     writer.eval()
     return ViLatent(reader, tokenizer, template, writer, mode=ckpt["mode"], memory_factor=ckpt["memory_factor"],
-                    chunk_tokens=ckpt["chunk_tokens"])
+                    chunk_tokens=ckpt["chunk_tokens"], bm25=ckpt.get("bm25"))

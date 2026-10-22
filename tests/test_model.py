@@ -16,12 +16,16 @@ CONTEXT = ("Hà Nội là thủ đô của Việt Nam. Thành phố có diện t
            "Vua Lý Thái Tổ dời đô năm 1010.")
 
 
+BM25 = {"k1": 1.5, "b": 0.75}
+
+
 def make_model(reader, tokenizer, template, ratio=4, chunk_tokens=12, mode="M"):
     """``ratio`` is the budget ratio r; the writer pools 2r tokens in ME."""
     torch.manual_seed(0)
     writer = MemoryWriter(reader, tokenizer, n_layers=4, ratio=2 * ratio if mode == "ME" else ratio,
                           sees_question=mode == "W5", autocast=False)
-    return ViLatent(reader, tokenizer, template, writer, mode=mode, chunk_tokens=chunk_tokens)
+    return ViLatent(reader, tokenizer, template, writer, mode=mode, chunk_tokens=chunk_tokens,
+                    bm25=BM25 if mode == "ME" else None)
 
 
 def qa(i=0, q="Ai dời đô ?", a="vua Lý Thái Tổ", context=CONTEXT):

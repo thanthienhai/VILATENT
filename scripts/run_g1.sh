@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # G0 + G1 pipeline, one stage at a time (docs/RUN_G0_G1.md):
 #   bash scripts/run_g1.sh data template g0          # week 1–2
-#   bash scripts/run_g1.sh teacher stage1 stage2 eval select fallback report   # week 3
+#   bash scripts/run_g1.sh teacher stage1 stage2 select stage2b eval fallback report   # week 3
+# ViQuAD splits (review of 22/10/2026): train; gate (whole articles, only for the G1 decision);
+# select (other whole articles: checkpoints, f*, the control's learning rate, τ); viwordc_dev
+# (ViWord-C's dev, same articles as train: auxiliary table only); test (never read at G1, only
+# its contexts for the leak filters). configs/bm25.json (k1, b) was tuned on select beforehand.
 # Auto-generated QA (not used by G1; for weeks 4–6). The GPU cluster cannot reach the teacher
 # endpoint, so generation runs elsewhere and its output is published on the Hugging Face Hub:
 #   bash scripts/run_g1.sh qa_generate               # machine inside the iCOMM network, CPU only
@@ -30,9 +34,15 @@ G0_READERS=${G0_READERS:-"$READER $READER_9B"}
 G0_ARGS=${G0_ARGS:-}            # extra scripts/g0_check.py arguments (smoke test, 9B on a T4)
 TRAIN_ARGS=${TRAIN_ARGS:-}      # extra scripts/train.py arguments (smoke test: --steps …)
 EVAL_ARGS=${EVAL_ARGS:-}        # extra scripts/evaluate.py arguments (smoke test: --batch-size …)
-EVAL_FILES="data/tasks/viquad_dev.jsonl data/tasks/viquad_test.jsonl"
+TASKS=data/tasks
+EVAL_EXT="data/eval_ext/mlqa_vi_dev.jsonl data/eval_ext/mlqa_vi_test.jsonl data/eval_ext/belebele_vi.jsonl
+  data/eval_ext/vietnews_dev.jsonl data/eval_ext/vietnews_test.jsonl"
+# every evaluation file, for the leak filters (training text must not overlap any of them)
+EVAL_FILES="$TASKS/viquad_gate.jsonl $TASKS/viquad_select.jsonl $TASKS/viquad_viwordc_dev.jsonl
+  $TASKS/viquad_test.jsonl $EVAL_EXT"
 CFG=configs/readers/$SLUG.json
 TEACHER_DIR=data/teacher/$SLUG
+RES=results/g1
 export PYTHONIOENCODING=utf-8
 
 log() { echo "[$(date '+%F %T')] $*"; }
@@ -67,10 +77,11 @@ reader_cfg() {
 }
 
 stage_data() {
-  log "ViQuAD 2.0 (ViWord-C split) and leak-filtered train"
-  python scripts/prepare_viquad.py --out-dir data/tasks
-  python scripts/leak_filter.py --input data/tasks/viquad_train.jsonl --eval-files $EVAL_FILES \
-    --out data/tasks/viquad_train_clean.jsonl
+  log "ViQuAD 2.0 split by article, contexts of the later evaluation sets, leak-filtered train"
+  python scripts/prepare_viquad.py --out-dir $TASKS
+  python scripts/prepare_external_eval.py --out-dir data/eval_ext
+  python scripts/leak_filter.py --input $TASKS/viquad_train.jsonl --eval-files $EVAL_FILES \
+    --out $TASKS/viquad_train_clean.jsonl
   log "stage-1 corpus (Wikipedia + BKAINewsCorpus) and (A, B) pairs"
   python scripts/build_corpus.py --eval-files $EVAL_FILES --n-wiki "$N_WIKI" --n-news "$N_NEWS" \
     --out data/corpus/docs.jsonl
@@ -109,17 +120,18 @@ sys.exit(0 if sha256_file("data/qa_gen/qa_raw.jsonl") == meta["sha256"] else "qa
 stage_qa_filter() {
   log "two-way check of the auto-generated QA with $READER"
   python scripts/filter_qa.py --input data/qa_gen/qa_raw.jsonl --reader "$READER" --reader-config "$CFG" \
-    --eval-files $EVAL_FILES --out data/qa_gen/qa_clean.jsonl --dtype "$DTYPE" --quant "$QUANT"
+    --eval-files $EVAL_FILES --dropped-docs data/corpus/docs.dropped.jsonl --out data/qa_gen/qa_clean.jsonl \
+    --dtype "$DTYPE" --quant "$QUANT"
 }
 
 stage_teacher() {
   local jobs=() pair
   for pair in "data/stage1/pairs_train.jsonl continue pairs_train" "data/stage1/pairs_dev.jsonl continue pairs_dev" \
-              "data/tasks/viquad_train_clean.jsonl qa viquad_train" "data/tasks/viquad_dev.jsonl qa viquad_dev"; do
+              "$TASKS/viquad_train_clean.jsonl qa viquad_train" "$TASKS/viquad_select.jsonl qa viquad_select"; do
     set -- $pair
     jobs+=("python scripts/precompute_teacher.py --reader $READER --reader-config $CFG --data $1 --task $2 --out $TEACHER_DIR/$3.pt --dtype $DTYPE --quant $QUANT")
   done
-  log "teacher logits for the stage-1 pairs and ViQuAD train/dev"
+  log "teacher logits for the stage-1 pairs and ViQuAD train/select"
   on_gpus "${jobs[@]}"
 }
 
@@ -135,22 +147,69 @@ stage_stage2() {
           "$(train_cmd stage2_m)" "$(train_cmd stage2_w5)"
 }
 
-stage_eval() {
-  log "ViQuAD dev at ${RATIO}x: references, hard baselines, ViLatent-ME (f = 2, 4, 8), -M, W5"
-  local eval="python scripts/evaluate.py --reader $READER --reader-config $CFG --data data/tasks/viquad_dev.jsonl"
-  eval+=" --ratios $RATIO --out-dir results/g1_dev --dtype $DTYPE --quant $QUANT $EVAL_ARGS --methods"
-  local ckpt="runs/g1_stage2_%s_r${RATIO}/best.pt" soft="" run
-  for run in me_f2 me_f4 me_f8 m w5; do soft+=" vilatent:$(printf "$ckpt" "$run")"; done
-  on_gpus "$eval full none truncation lead bm25 llmlingua2" "$eval$soft"
+# a value of a choice file written by scripts/choose_by_loss.py
+choice() { python -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
+
+# ViLatent-ME: memory factor f* chosen on the select dev loss of the three ME runs (not on any F1)
+stage_select() {
+  python scripts/choose_by_loss.py --key memory_factor --out $RES/me_choice_r$RATIO.json \
+    $(for f in 2 4 8; do echo "$f=runs/g1_stage2_me_f${f}_r$RATIO"; done)
 }
 
-# ViLatent-ME: memory factor f chosen on stage-2 dev loss (not on dev F1, which the gate uses)
-stage_select() { python scripts/select_me.py --ratio "$RATIO" --results-dir results/g1_dev; }
+# At f*: ME with seed 1 (the gate pools two seeds) and the learned-prompt control at lr 1e-4 and
+# 1e-3; the control's learning rate is then chosen on the select dev loss.
+stage_stage2b() {
+  local f pe
+  f=$(choice $RES/me_choice_r$RATIO.json memory_factor)
+  pe="$(train_cmd stage2_prompt) --memory-factor $f"
+  on_gpus "$(train_cmd stage2_me_f$f) --seed 1 --out-dir runs/g1_stage2_me_f${f}_s1_r$RATIO" \
+          "$pe --lr-adapter 1e-4 --out-dir runs/g1_stage2_prompt_f${f}_lr1e-4_r$RATIO" \
+          "$pe --lr-adapter 1e-3 --out-dir runs/g1_stage2_prompt_f${f}_lr1e-3_r$RATIO"
+  python scripts/choose_by_loss.py --key lr_adapter --out $RES/pe_choice_r$RATIO.json \
+    "1e-4=runs/g1_stage2_prompt_f${f}_lr1e-4_r$RATIO" "1e-3=runs/g1_stage2_prompt_f${f}_lr1e-3_r$RATIO"
+}
 
-# ViLatent-MEF: choose tau on dev (smallest re-reading that keeps >= 95% of full-context F1)
-stage_fallback() { python scripts/fallback_report.py --results-dir results/g1_dev --ratio "$RATIO"; }
+# gate: every method; ME at f = 2, 4, 8 with own and with swapped memory; ME f* seed 1; the control.
+# select: full and ME f* (for τ). viwordc_dev (auxiliary): references, hard baselines, ME f*, M, W5.
+stage_eval() {
+  local f me m w5 ev gate soft swap g
+  f=$(choice $RES/me_choice_r$RATIO.json memory_factor)
+  me="vilatent:runs/g1_stage2_me_f${f}_r$RATIO/best.pt"
+  m="vilatent:runs/g1_stage2_m_r$RATIO/best.pt"
+  w5="vilatent:runs/g1_stage2_w5_r$RATIO/best.pt"
+  ev="python scripts/evaluate.py --reader $READER --reader-config $CFG --ratios $RATIO --dtype $DTYPE --quant $QUANT"
+  ev+=" $EVAL_ARGS"
+  gate="$ev --data $TASKS/viquad_gate.jsonl --out-dir $RES/gate --methods"
+  soft=" $m $w5 vilatent:runs/g1_stage2_me_f${f}_s1_r$RATIO/best.pt,name=vilatent_me_f${f}_s1"
+  soft+=" vilatent:$(choice $RES/pe_choice_r$RATIO.json run)/best.pt"
+  swap=""
+  for g in 2 4 8; do
+    soft+=" vilatent:runs/g1_stage2_me_f${g}_r$RATIO/best.pt"
+    swap+=" vilatent:runs/g1_stage2_me_f${g}_r$RATIO/best.pt,swap=0"
+  done
+  log "ViQuAD gate, select and ViWord-C dev at ${RATIO}x (f* = $f)"
+  on_gpus "$gate full none truncation lead bm25 llmlingua2" "$gate$soft" "$gate$swap" \
+          "$ev --data $TASKS/viquad_select.jsonl --out-dir $RES/select --methods full $me" \
+          "$ev --data $TASKS/viquad_viwordc_dev.jsonl --out-dir $RES/viwordc --methods full none truncation lead bm25 llmlingua2 $me $m $w5"
+}
 
-stage_report() { python scripts/g1_report.py --results-dir results/g1_dev --ratio "$RATIO"; }
+# ViLatent-MEF: τ chosen on select (smallest re-reading that keeps >= 95% of full-context F1), then
+# applied unchanged to gate and ViWord-C dev
+stage_fallback() {
+  local f d
+  f=$(choice $RES/me_choice_r$RATIO.json memory_factor)
+  python scripts/fallback_report.py --results-dir $RES/select --ratio "$RATIO" --me vilatent_me_f$f
+  for d in gate viwordc; do
+    python scripts/fallback_report.py --results-dir $RES/$d --ratio "$RATIO" --me vilatent_me_f$f \
+      --tau-file $RES/select/mef_tau_r$RATIO.json
+  done
+}
+
+# the auxiliary ViWord-C table first, the gate decision last (the last line of the log)
+stage_report() {
+  python scripts/g1_report.py --results-dir $RES/viwordc --choices-dir $RES --ratio "$RATIO"
+  python scripts/g1_report.py --results-dir $RES/gate --choices-dir $RES --ratio "$RATIO" --gate
+}
 
 for stage in "$@"; do
   log "=== $stage"

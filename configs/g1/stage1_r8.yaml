@@ -21,7 +21,7 @@ max_grad_norm: 1.0
 warmup_frac: 0.03
 steps: 2500
 effective_batch: 32
-micro_batch: 8
+micro_batch: 32  # effective_batch 32 in one pass: peak ~10.5 GB at 8 on H100 (smoke 22/10/2026)
 eval_every: 250
 log_every: 10
 seed: 0

@@ -1,14 +1,16 @@
-"""ViLatent-MEF (H7): choose τ on dev, or apply a fixed τ on test.
+"""ViLatent-MEF (H7): choose τ on ViQuAD select, or apply that fixed τ elsewhere.
 
-dev:  reads <dir>/vilatent_me_r<r>.jsonl and <dir>/full.jsonl, writes the whole trade-off
-      curve (F1, fallback rate, mean reader tokens, confident-but-wrong rate for every τ),
-      the chosen operating point (smallest τ with F1 ≥ 95% of full context) to mef_tau_r<r>.json,
-      and the combined rows to vilatent_mef_r<r>.jsonl (so g1_report.py lists them).
-test: the same with --tau-file pointing to the dev choice; τ is not re-chosen on test.
+select: reads <dir>/<me>_r<r>.jsonl and <dir>/full.jsonl, writes the whole trade-off curve
+        (F1, fallback rate, mean reader tokens, confident-but-wrong rate for every τ), the
+        chosen operating point (smallest τ with F1 ≥ 95% of full context) to mef_tau_r<r>.json,
+        and the combined rows to vilatent_mef_r<r>.jsonl (so g1_report.py lists them).
+gate, ViWord-C dev, test: the same with --tau-file pointing to the select choice; τ is not
+        chosen again.
 
 Usage:
-  python scripts/fallback_report.py --results-dir results/g1_dev --ratio 4
-  python scripts/fallback_report.py --results-dir results/test --ratio 4 --tau-file results/g1_dev/mef_tau_r4.json
+  python scripts/fallback_report.py --results-dir results/g1/select --ratio 4 --me vilatent_me_f4
+  python scripts/fallback_report.py --results-dir results/g1/gate --ratio 4 --me vilatent_me_f4 \
+      --tau-file results/g1/select/mef_tau_r4.json
 """
 import argparse
 import json

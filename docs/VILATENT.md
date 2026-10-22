@@ -12,6 +12,19 @@
 > Lý do và bằng chứng ở mục "Nén có điều kiện theo câu hỏi" và "Đọc theo câu hỏi". Các mục bị ảnh hưởng:
 > tóm tắt, tổng quan, giả thuyết H1, H6, H7, kiến trúc, huấn luyện, thiết kế thực nghiệm, G1, rủi ro, tài liệu
 > tham khảo [15]–[24].
+>
+> **Sửa đổi 22/10/2026, sau rà soát rò rỉ và logic (chưa đồng bộ sang bản Claude Doc):**
+>
+> - Dev của ViWord-C chung cả 90 bài Wikipedia với train (81% câu train đến từ các bài đó), trong khi test tách bài.
+>   Nay tách theo bài từ train: **ViQuAD gate** (16 bài, 1.228 câu, chỉ dùng cho cổng) và **ViQuAD select** (6 bài,
+>   621 câu, dùng chọn checkpoint, f, τ, learning rate của đối chứng và tham số BM25). Dev của ViWord-C giữ ngoài
+>   train, chỉ làm bảng phụ để so với ViWord-C.
+> - Thêm hai đối chứng cho nhiễu "học kiểu đáp án" (ViLatent học trên đáp án vàng, mốc cứng thì không): ME với
+>   memory của đoạn khác, và "prompt học được + BM25". G1 thêm điều kiện ME − (prompt + BM25) có cận dưới CI > 0.
+> - Tham số BM25 (k1, b) được dò trên select trước G1, dùng chung cho mốc BM25 và câu gốc của ME.
+> - ME ở f* chạy thêm seed 1; cổng gộp hai seed. Điều kiện "không đọc được < 2%" chỉ ràng ME và mốc cứng tốt nhất.
+> - Corpus giai đoạn 1, ViQuAD train và QA sinh được lọc thêm theo MLQA-vi, Belebele-vi và VietNews.
+> - p-value một phía của bootstrap tính trên phân phối dời về giả thuyết không.
 
 ## Tóm tắt và động cơ
 
@@ -92,7 +105,7 @@ Tổng hợp: (1) không cơ chế nào bảo đảm memory còn giữ dữ ki�
 | H4, kiểu thất bại (mô tả) | Mức tụt F1 lớn nhất ở câu hỏi có đáp án là số và thực thể tên riêng, ở đáp án nằm sát ranh giới khúc, và ở câu có phủ định | Phân tầng F1 theo loại đáp án và vị trí trong khúc; probe kim (needle) là số hoặc từ; hồi quy logistic | Không bác bỏ, chỉ báo cáo hệ số kèm khoảng tin cậy |
 | H5, kiến trúc lai và transformer thuần (mô tả) | Không đặt hướng cho mức giữ F1. Về hiệu năng, TTFT giảm ở cả hai reader. Bộ nhớ giảm ít hơn nhiều ở Qwen3.5-9B, vì chỉ 8 trong 32 lớp có KV cache | Mức giữ F1 so với ngữ cảnh đầy đủ của chính reader đó; TTFT; bộ nhớ đỉnh gồm KV và trạng thái DeltaNet | Không bác bỏ, chỉ báo cáo khoảng tin cậy. Hai reader khác nhau cả về dữ liệu, kích thước và tokenizer, nên không quy kết quả riêng cho kiến trúc |
 | H6, cái giá của nén mù câu hỏi (mô tả) | W5 (bộ ghi thấy câu hỏi) hơn W0 ở cùng tỉ lệ; mức chênh lớn nhất ở đáp án là số và thực thể, như [17], [24] gợi ý | F1 của ViLatent-M (W0) và W5, cùng r, cùng giai đoạn 1; phân tầng theo loại đáp án như H4; ViLatent-ME đặt cạnh để xem đọc lai bù được bao nhiêu | Không bác bỏ, chỉ báo cáo chênh lệch kèm khoảng tin cậy bootstrap theo đoạn |
-| H7, đánh đổi khi cho phép đọc lại (mô tả) | Với ngưỡng τ chọn trên dev, ViLatent-MEF đạt ít nhất 95% F1 của toàn văn mà phần lớn câu hỏi vẫn chỉ đọc memory | Đường F1 theo số token trung bình khi τ thay đổi; tại τ cố định: F1, tỉ lệ đọc lại, số token trung bình, tỉ lệ câu sai mà reader vẫn tự tin | Không bác bỏ, chỉ báo cáo. τ chốt trên dev trước khi chạy test |
+| H7, đánh đổi khi cho phép đọc lại (mô tả) | Với ngưỡng τ chọn trên ViQuAD select, ViLatent-MEF đạt ít nhất 95% F1 của toàn văn mà phần lớn câu hỏi vẫn chỉ đọc memory | Đường F1 theo số token trung bình khi τ thay đổi; tại τ cố định: F1, tỉ lệ đọc lại, số token trung bình, tỉ lệ câu sai mà reader vẫn tự tin | Không bác bỏ, chỉ báo cáo. τ chốt trên ViQuAD select trước khi chạy tập cổng và test |
 
 Về H2 cần thận trọng. LACC từng thấy tiếng Việt không bị thiệt hơn các ngôn ngữ khác (τ trong khoảng ±0,02), nên H2 có thể không đúng. TOST chỉ có nghĩa khi đủ mẫu: cần tính MDE trước khi chạy, không lặp lại lỗi TOST thiếu lực kiểm định của LACC.
 
@@ -135,7 +148,7 @@ Memory của một tài liệu được ghi một lần rồi dùng lại cho m�
 
 **Thành phần của khung gốc (W0):**
 
-1. **Chia khúc theo câu.** Ngữ cảnh được cắt thành các khúc 256–512 token của reader, ranh giới luôn rơi vào cuối câu. Lý do: cắt giữa câu gây ra lỗi "lost by the boundary", và ở LACC đơn vị câu hoạt động tốt hơn đơn vị token.
+1. **Chia khúc theo câu.** Ngữ cảnh được cắt thành các khúc tối đa 512 token của reader, ranh giới luôn rơi vào cuối câu; câu được gom tham lam nên khúc cuối có thể ngắn, và đoạn ViQuAD thường chỉ là một khúc. Lý do: cắt giữa câu gây ra lỗi "lost by the boundary", và ở LACC đơn vị câu hoạt động tốt hơn đơn vị token.
 2. **Bộ ghi.** Sao chép L lớp đáy của reader (mặc định L = 4), cho phép huấn luyện bản sao này hoặc chỉ gắn LoRA lên nó. Reader gốc giữ nguyên.
    - Qwen3.5 xếp lớp theo nhóm 4: ba lớp Gated DeltaNet rồi một lớp Gated Attention. L phải là bội số của 4 để bộ ghi có ít nhất một lớp attention.
    - Lớp DeltaNet chỉ đọc từ trái sang phải. Với L = 2 như LatentPress, token đầu khúc sẽ không thấy phần còn lại của khúc.
@@ -157,12 +170,12 @@ Memory của một tài liệu được ghi một lần rồi dùng lại cho m�
 | --- | --- | --- | --- |
 | ViLatent-M | ⟨mem⟩ memory ở tỉ lệ r ⟨/mem⟩ | k vector | W0 thuần; đối chứng cho H6 |
 | **ViLatent-ME** (hệ chính) | ⟨mem⟩ memory ở tỉ lệ r·f ⟨/mem⟩, ngay sau đó là các câu gốc chọn theo câu hỏi, giữ thứ tự trong văn bản, không thêm nhãn | k_m = Σ⌈nᵢ/(r·f)⌉ vector + (k − k_m) token câu gốc = k | Hệ dùng cho H1–H3 và G1 |
-| ViLatent-MEF | Như ME; nếu log-prob trung bình của các token câu trả lời dưới τ thì đọc lại toàn văn | k, hoặc n khi đọc lại; báo cáo số token trung bình | H7 |
+| ViLatent-MEF | Như ME; nếu log-prob trung bình của các token câu trả lời (kể cả token kết thúc lượt) dưới τ thì đọc lại toàn văn | k, hoặc n khi đọc lại; báo cáo số token trung bình | H7 |
 
-- Câu gốc được chọn bằng BM25 trên âm tiết, cùng cách với mốc chọn câu: giữ các câu điểm cao nhất còn vừa (chỉ câu có điểm > 0, tức có âm tiết chung với câu hỏi), phần ngân sách còn lại lấp bằng phần đầu của câu điểm cao nhất chưa vừa, cắt theo token của reader. Con số, ngày tháng và tên riêng trong các câu này đến reader nguyên văn, đúng loại thông tin nén mềm hay làm mất [24].
-- Ngưỡng τ chọn trên dev: τ nhỏ nhất (ít lần đọc lại nhất) sao cho F1 của MEF ≥ 95% F1 toàn văn. Mọi τ nằm giữa hai độ tự tin liền kề trên dev cho cùng kết quả, nên τ đặt ở điểm giữa. τ được chốt trước khi chạy test. Câu trả lời sai nhưng reader vẫn tự tin không bị cơ chế này bắt, nên tỉ lệ đó được báo cáo riêng [22].
-- **Hệ số memory f ∈ {2, 4, 8}** quyết định cách chia ngân sách: phần câu gốc xấp xỉ 50%, 75% và 87,5% của k. f được chọn theo loss dev của giai đoạn 2 (CE + λ·KL, cùng đáp án và cùng thầy nên so sánh được giữa các f), không theo F1 dev, vì cổng G1 đo bằng F1 dev và chọn theo chính F1 đó sẽ làm cổng lạc quan. F1 của cả ba f vẫn được báo cáo. Mỗi f cần một bộ ghi huấn luyện ở r·f (G1 ở 4× dùng bộ ghi 8×, 16× và 32×).
-- **Đo trước trên ViQuAD dev** (1.175 câu, tokenizer Qwen3.5, đo lại ngày 19/10/2026 với cách chọn câu hiện tại; bản 16/10 còn giữ câu điểm 0 và lấp theo từ, cho 29,0% / 44,3% / 54,2% / 60,8%): tỉ lệ câu có đáp án vàng nằm nguyên văn trong phần câu gốc. Đoạn ViQuAD ngắn (trung vị 204 token), nên ở 4× cả ngân sách chỉ khoảng 51 token và không cách chọn văn bản nào tự loại bỏ được rủi ro. Phần còn lại phải dựa vào memory, và lưới an toàn thật là cơ chế dự phòng của MEF.
+- Câu gốc được chọn bằng BM25 trên âm tiết, cùng cách với mốc chọn câu: giữ các câu điểm cao nhất còn vừa (chỉ câu có điểm > 0, tức có âm tiết chung với câu hỏi), phần ngân sách còn lại lấp bằng phần đầu của câu điểm cao nhất chưa vừa, cắt theo token của reader. Tham số k1, b của BM25 được dò trên ViQuAD select trước G1 (`configs/bm25.json`) và dùng chung cho mốc BM25 lẫn ME. Lưới k1 ∈ {0,9; 1,2; 1,5; 2,0} × b ∈ {0,3; 0,5; 0,75; 1,0}, Qwen3.5-2B fp16 trên T4, 4×: chọn k1 = 2,0, b = 1,0 (F1 47,19, so với 47,00 ở giá trị mặc định 1,5 / 0,75; cả lưới nằm trong 45,65–47,19). Con số, ngày tháng và tên riêng trong các câu này đến reader nguyên văn, đúng loại thông tin nén mềm hay làm mất [24].
+- Ngưỡng τ chọn trên ViQuAD select: τ nhỏ nhất (ít lần đọc lại nhất) sao cho F1 của MEF ≥ 95% F1 toàn văn. Mọi τ nằm giữa hai độ tự tin liền kề trên select cho cùng kết quả, nên τ đặt ở điểm giữa. τ được chốt trước khi chạy trên tập cổng và test. Câu trả lời sai nhưng reader vẫn tự tin không bị cơ chế này bắt, nên tỉ lệ đó được báo cáo riêng [22].
+- **Hệ số memory f ∈ {2, 4, 8}** quyết định cách chia ngân sách: phần câu gốc xấp xỉ 50%, 75% và 87,5% của k. f được chọn theo loss dev của giai đoạn 2 (CE + λ·KL, cùng đáp án và cùng thầy nên so sánh được giữa các f) trên ViQuAD select, tập tách bài với tập cổng, nên việc chọn không làm cổng lạc quan. F1 của cả ba f vẫn được báo cáo. Mỗi f cần một bộ ghi huấn luyện ở r·f (G1 ở 4× dùng bộ ghi 8×, 16× và 32×).
+- **Đo trước trên dev của ViWord-C** (1.175 câu, tokenizer Qwen3.5, đo lại ngày 19/10/2026 với cách chọn câu hiện tại và BM25 mặc định k1 = 1,5, b = 0,75; bản 16/10 còn giữ câu điểm 0 và lấp theo từ, cho 29,0% / 44,3% / 54,2% / 60,8%): tỉ lệ câu có đáp án vàng nằm nguyên văn trong phần câu gốc. Đoạn ViQuAD ngắn (trung vị 204 token), nên ở 4× cả ngân sách chỉ khoảng 51 token và không cách chọn văn bản nào tự loại bỏ được rủi ro. Phần còn lại phải dựa vào memory, và lưới an toàn thật là cơ chế dự phòng của MEF.
 
   | Ngân sách 4× | f = 2 (memory 8×) | f = 4 (16×) | f = 8 (32×) | BM25 dùng cả k | Truncation |
   | --- | --- | --- | --- | --- | --- |
@@ -227,8 +240,8 @@ Ba nhánh mục tiêu cho H3, khác nhau ở giai đoạn 1:
 
 - AdamW, lr 1e-4 cho adapter và 2e-5 cho các lớp bộ ghi. Kiểu bf16, bật gradient checkpointing.
 - Batch hiệu dụng 32 qua tích lũy gradient, λ\_KL = 1.
-- Mỗi tỉ lệ nén huấn luyện một bộ ghi riêng. Ba seed cho các cấu hình chính.
-- Chọn checkpoint theo loss trên dev của giai đoạn 2, không theo điểm trên tập test.
+- Mỗi tỉ lệ nén huấn luyện một bộ ghi riêng. Ba seed cho các cấu hình chính; ở G1, ME với f* chạy hai seed giai đoạn 2.
+- Chọn checkpoint theo loss giai đoạn 2 trên ViQuAD select (tách bài với tập cổng và test), không theo điểm trên tập cổng hay test.
 - Mọi lượt sinh dùng làm dữ liệu chạy với `enable_thinking=False` và template đã cố định. Điều này áp dụng cho logit thầy, đích của dữ liệu trộn γ và bước lọc hai chiều.
 - Trước khi huấn luyện, kiểm tra gradient từ loss về `memory_embeds` là hữu hạn và khác 0 sau khi đi qua mọi lớp DeltaNet.
 
@@ -241,7 +254,7 @@ Phần lớn dữ liệu đánh giá đã có sẵn trong ViWord-C. Ba thứ cò
 | Mục đích | Nguồn | Ghi chú | Trạng thái |
 | --- | --- | --- | --- |
 | Giai đoạn 1: cặp (A, B) liên tiếp | Wikipedia tiếng Việt và tin tức | 5.000–10.000 bước × batch 32 cho ra khoảng 160–320 nghìn cặp. Bộ chưng cất hiện có của ViWord-C chỉ có 9.162 đoạn, không đủ | Cần xây |
-| Giai đoạn 2: QA có nhãn | UIT-ViQuAD 2.0, tập train | Dùng lại split của ViWord-C: dev 1.175 câu / 250 đoạn lấy từ train, validation làm test (2.653 câu / 557 đoạn) | Có sẵn |
+| Giai đoạn 2: QA có nhãn | UIT-ViQuAD 2.0, tập train | Validation làm test (2.653 câu / 557 đoạn / 19 bài, không bài nào có trong train). Từ train tách theo bài, chỉ lấy bài có tối đa 200 câu, seed 0: gate 1.228 câu / 244 đoạn / 16 bài (chỉ cho cổng), select 621 câu / 125 đoạn / 6 bài (chọn cấu hình). Dev của ViWord-C (1.175 câu / 250 đoạn, lấy theo đoạn nên chung bài với train) giữ ngoài train, chỉ làm bảng phụ. Train còn 16.318 câu trước khi lọc rò rỉ | Có sẵn |
 | Giai đoạn 2: QA sinh tự động | LLM thầy iCOMM 27B (endpoint sẵn có) sinh câu hỏi trên đoạn tin tức và Wikipedia | Chỉ giữ câu mà reader đọc ngữ cảnh đầy đủ trả lời đúng (kiểm tra hai chiều). Có đủ ba loại đáp án: số, thực thể, mô tả | Cần xây |
 | QA nhiều tài liệu, ngữ cảnh dài | Ghép đoạn ViQuAD với đoạn nhiễu lấy bằng BM25 | 2.000–8.000 token, vị trí đoạn vàng thay đổi để đo "lost in the middle" | Cần xây, chi phí thấp |
 | H2: song song Việt–Anh | [MLQA](https://aclanthology.org/2020.acl-main.653) (tiếng Việt: dev 511 câu, test 5.495 câu, mọi câu đều song song với tiếng Anh) và Belebele | MLQA không có tập train. Vì vậy huấn luyện hai bộ ghi riêng trên dữ liệu cùng cỡ: bộ ghi tiếng Anh tinh chỉnh trên SQuAD, cắt cho bằng số mẫu ViQuAD. Belebele đã có loader trong ViWord-C | Có sẵn |
@@ -250,10 +263,11 @@ Phần lớn dữ liệu đánh giá đã có sẵn trong ViWord-C. Ba thứ cò
 | Ngoài tài liệu: tuân thủ chỉ dẫn | Dịch một phần [IFEval](https://arxiv.org/abs/2311.07911), chỉ lấy các loại chỉ dẫn có bộ kiểm tra không phụ thuộc ngôn ngữ (đếm từ, từ khóa, định dạng) | Chưa tìm thấy IFEval tiếng Việt | Cần xây |
 | Dữ liệu trộn ngoài tài liệu (γ) | Câu hỏi của đoạn X ghép với memory của đoạn Y, cùng các chỉ dẫn chung | Đích là câu trả lời của chính reader khi không có memory, nên không cần gán nhãn | Cần xây, tự động |
 
-**Chống rò rỉ.** Đoạn văn của ViQuAD và MLQA đều lấy từ Wikipedia, nên corpus giai đoạn 1 phải loại theo bài:
+**Chống rò rỉ.** Đoạn văn của ViQuAD và MLQA đều lấy từ Wikipedia, nên dữ liệu phải tách và loại theo bài:
 
-- Bỏ mọi bài Wikipedia có xuất hiện trong dev hoặc test.
-- Sau đó chạy `scripts/leak_filter.py` (trùng n-gram 13 token) trên mọi tập huấn luyện, kể cả QA sinh tự động.
+- Tập dùng cho quyết định (gate, select, test) tách bài với train của giai đoạn 2. Tách theo đoạn như dev của ViWord-C để lại các đoạn khác của cùng bài trong train, và chỉ phương pháp được huấn luyện mới hưởng lợi từ đó.
+- Corpus giai đoạn 1 bỏ mọi bài Wikipedia trùng tiêu đề với một tập đánh giá (gate, select, dev của ViWord-C, test, MLQA). Danh sách bài bị bỏ được ghi lại để bỏ luôn QA sinh từ các bài đó.
+- Sau đó lọc trùng n-gram 13 âm tiết với mọi tập đánh giá, cả tập dùng sau G1 (MLQA-vi, Belebele-vi, VietNews dev và test; Vi-MQA sau khi kiểm giấy phép), trên corpus giai đoạn 1, ViQuAD train và QA sinh tự động.
 - LACC từng rò rỉ tập holdout, nên mỗi tập đều ghi sidecar provenance theo kiểu `segment_meta.py`.
 
 ## Thiết kế thực nghiệm
@@ -271,8 +285,11 @@ Mỗi phương pháp được so trên cùng reader và cùng ngân sách n/r to
 | Tóm tắt bằng văn bản | LLM thầy tóm tắt vừa ngân sách | Mốc của LatentPress |
 | Nén mềm | ICAE cài lại trên cùng reader (nhánh O-AE chính là bản xấp xỉ của nó) | Mốc nén mềm kinh điển |
 | Cấu hình của chính ViLatent | ViLatent-M (memory thuần), W5 (bộ ghi thấy câu hỏi), ViLatent-MEF (có dự phòng) | Tách đóng góp của câu gốc, của câu hỏi và của việc đọc lại (H6, H7) |
+| Đối chứng huấn luyện | Prompt học được + BM25: k_m vector học được không phụ thuộc ngữ cảnh, cùng câu gốc, cùng dữ liệu và loss với ME; ME đọc memory của một đoạn thuộc bài khác (chỉ đánh giá) | Tách phần lợi do học kiểu đáp án khỏi phần lợi do nội dung memory |
 
 ViLatent-ME dùng câu hỏi lúc đọc, nên mốc so sánh trực tiếp nhất của nó là nhóm nén cứng có dùng câu hỏi (BM25, LongLLMLingua). H1 vẫn so với mốc tốt nhất trong mọi nhóm; báo cáo tách riêng hai nhóm "không dùng câu hỏi" và "có dùng câu hỏi".
+
+ViLatent được huấn luyện trên đáp án vàng còn mốc nén cứng dùng reader zero-shot, nên một phần chênh lệch có thể đến từ việc học kiểu đáp án (độ dài, cách cắt span), không từ nén. Hai embedding biên và memory hoạt động như một soft prompt. Đối chứng "prompt học được + BM25" có cùng mọi thứ trừ nội dung memory, nên ME trừ đối chứng này là phần memory thật sự đóng góp.
 
 **Độ đo:**
 
@@ -306,19 +323,24 @@ ViLatent-ME dùng câu hỏi lúc đọc, nên mốc so sánh trực tiếp nh�
 
 **Thống kê:** dùng lại `viword/stats.py`, phiên bản đã sửa lỗi bootstrap theo cụm của LACC.
 
-- Bootstrap cặp theo seed × cụm đoạn văn, 10.000 lần lấy mẫu.
+- Bootstrap cặp theo seed × cụm đoạn văn, 10.000 lần lấy mẫu. p-value một phía lấy từ phân phối bootstrap dời về giả thuyết không (Efron và Tibshirani, §16.4). Vì các đoạn của cùng một bài không độc lập, chênh lệch chính được báo cáo thêm với cụm là bài, làm phân tích độ nhạy.
 - Họ Holm cho H1 gồm 2 tỉ lệ × 2 tác vụ QA với reader chính; H3 là một họ riêng.
 - Tính MDE trước khi chạy đầy đủ. H2 đã dùng toàn bộ 5.495 câu test tiếng Việt của MLQA. Nếu MDE vẫn lớn hơn 2 F1 thì không chạy TOST mà hạ H2 xuống phân tích mô tả.
-- Reader thứ hai chỉ phân tích mô tả. Mọi siêu tham số chọn trên dev với reader chính, rồi cố định.
+- Reader thứ hai chỉ phân tích mô tả. Mọi siêu tham số chọn trên ViQuAD select với reader chính, rồi cố định.
 
 ## Cổng quyết định và lộ trình
 
 Có hai cổng sớm.
 
 - **G0, cuối tuần 2,** kiểm tra hạ tầng Qwen3.5. Ba việc phải chạy được trên cả 2B và 9B: truyền `inputs_embeds`, lan truyền ngược qua DeltaNet, và giải mã.
-- **G1, cuối tuần 3,** là cổng quan trọng nhất về mặt nghiên cứu. Nếu nén mềm trên Qwen3.5-2B không thắng mốc nén cứng tốt nhất ít nhất 3 F1, đề tài chuyển hướng trước khi tốn GPU cho reader 9B. Cổng đo trên **ViLatent-ME** ở ngân sách 4×, với f chọn theo loss dev: chênh lệch F1 so với mốc cứng tốt nhất ≥ 3 và cận dưới CI 95% bootstrap theo đoạn > 0. ME với cả ba f, ViLatent-M (4×) và W5 (4×) được báo cáo cạnh đó; MEF báo cáo dưới dạng đường đánh đổi, không dùng làm cổng.
+- **G1, cuối tuần 3,** là cổng quan trọng nhất về mặt nghiên cứu. Nếu nén mềm trên Qwen3.5-2B không thắng mốc nén cứng tốt nhất ít nhất 3 F1, đề tài chuyển hướng trước khi tốn GPU cho reader 9B. Cổng đo trên **ViLatent-ME** ở ngân sách 4× trên **ViQuAD gate** (16 bài tách khỏi train), với f* chọn theo loss trên ViQuAD select và hai seed giai đoạn 2. G1 đạt khi đủ ba điều kiện (sửa ngày 22/10/2026):
+  1. chênh lệch F1 so với mốc cứng tốt nhất ≥ 3 và cận dưới CI 95% bootstrap (seed × đoạn) > 0;
+  2. cận dưới CI 95% của ME trừ đối chứng "prompt học được + BM25" > 0, tức nội dung memory đóng góp thật;
+  3. tỉ lệ câu trả lời không đọc được dưới 2% với ME và mốc cứng tốt nhất.
 
-Ở G1, bộ ghi được chạy giai đoạn 1 rút gọn (2.000–3.000 bước O-LM) trước, rồi mới tinh chỉnh trên ViQuAD. G1 cần bốn lượt giai đoạn 1 (bộ ghi 4× cho M và W5; 8×, 16×, 32× cho ME với f = 2, 4, 8) và năm lượt giai đoạn 2; chi phí đo ở G0 quyết định có cần cắt bớt hay không. Nếu bỏ hẳn giai đoạn 1 (O-none), dữ liệu QA quá ít có thể khiến nén mềm thua oan và bị bỏ sai hướng. Việc lấy corpus và sinh QA chạy ngầm từ tuần 1, để tuần 4–6 không bị quá tải.
+  ME với cả ba f (kèm bản đổi memory), ViLatent-M (4×) và W5 (4×) được báo cáo cạnh đó; MEF báo cáo dưới dạng đường đánh đổi với τ chọn trên select, không dùng làm cổng. Bảng phụ trên dev của ViWord-C chỉ để so với ViWord-C.
+
+Ở G1, bộ ghi được chạy giai đoạn 1 rút gọn (2.000–3.000 bước O-LM) trước, rồi mới tinh chỉnh trên ViQuAD. G1 cần bốn lượt giai đoạn 1 (bộ ghi 4× cho M và W5; 8×, 16×, 32× cho ME với f = 2, 4, 8) và tám lượt giai đoạn 2 (ME với f = 2, 4, 8, M, W5, rồi ở f*: ME seed 1 và đối chứng prompt với hai learning rate); chi phí đo ở G0 quyết định có cần cắt bớt hay không. Nếu bỏ hẳn giai đoạn 1 (O-none), dữ liệu QA quá ít có thể khiến nén mềm thua oan và bị bỏ sai hướng. Việc lấy corpus và sinh QA chạy ngầm từ tuần 1, để tuần 4–6 không bị quá tải.
 
 ```mermaid
 flowchart TD
@@ -326,13 +348,13 @@ flowchart TD
   G0{"G0: inputs_embeds, backward qua DeltaNet<br/>và giải mã chạy được trên 2B và 9B"}
   F0["Quay về Qwen2.5-1.5B và 7B, đặt lại L = 2"]
   P1["Tuần 3 · Thử nhanh trên Qwen3.5-2B<br/>Giai đoạn 1 rút gọn ở 4×, 8×, 16×, 32×, rồi ViQuAD<br/>ViLatent-ME (f chọn theo loss dev) so với các mốc cứng; M, W5, MEF báo cáo kèm"]
-  G1{"G1: thắng mốc nén cứng tốt nhất<br/>ít nhất 3 F1 trên dev"}
+  G1{"G1: thắng mốc nén cứng tốt nhất<br/>ít nhất 3 F1 trên ViQuAD gate"}
   F1["Thử W2 thêm một tuần, rồi sang Hướng B"]
   P2["Tuần 4–6 · Dữ liệu và ablation trên Qwen3.5-2B<br/>Lọc QA sinh tự động, dịch IFEval, tính MDE từ lần thử G1<br/>O-LM với O-AE, số lớp L, W1, tỉ lệ trộn γ"]
   G2{"G2: chốt cấu hình; Vi-MQA tụt<br/>không quá 2 điểm khi có memory lạ"}
   F2["Tăng γ hoặc thêm bộ định tuyến"]
   P3["Tuần 7–9 · Huấn luyện chính trên Qwen3.5-9B<br/>4×, 8×, 16× với O-LM và O-AE, 3 seed<br/>Bộ ghi tiếng Việt, tiếng Anh cho MLQA; Vistral cho H5"]
-  G3{"G3: giữ ít nhất 90% F1 của<br/>ngữ cảnh đầy đủ ở 4× trên dev"}
+  G3{"G3: giữ ít nhất 90% F1 của<br/>ngữ cảnh đầy đủ ở 4× trên ViQuAD gate"}
   F3["Thêm một tuần giai đoạn 1, báo cáo trung thực"]
   P4["Tuần 10–11 · Đánh giá đầy đủ<br/>Hiệu năng, phân tích thất bại H4, so sánh H5<br/>Holm cho H1 và H3, TOST cho H2"]
   P5["Tuần 12–13 · Viết bài và công bố<br/>Bản 4 trang, công khai mã, checkpoint và dữ liệu<br/>Nộp hội nghị trong nước; bản 8 trang nếu H2 có kết quả"]
@@ -356,7 +378,7 @@ flowchart TD
 *Hình: lộ trình 13 tuần, 6 giai đoạn, 4 cổng. Hai cổng sớm G0 và G1 (tô màu) quyết định có đi tiếp với Qwen3.5
 và với nén mềm hay không.*
 
-Các cổng G1–G3 đo trên tập dev với reader chính, không bao giờ dùng tập test. Tiêu chí của mỗi cổng được ghi cố định trước khi chạy.
+Các cổng G1–G3 đo trên ViQuAD gate với reader chính, không bao giờ dùng tập test; mọi lựa chọn cấu hình làm trên ViQuAD select. Tiêu chí của mỗi cổng được ghi cố định trước khi chạy.
 
 ## Rủi ro và các yếu tố ảnh hưởng tính hợp lệ
 
@@ -375,11 +397,11 @@ Rủi ro lớn nhất là nén mềm không thắng được truncation và ch�
 | Nén mù câu hỏi mất đúng chi tiết cần trả lời | W5 hơn ViLatent-M rõ rệt (H6), nhất là với đáp án là số và thực thể | Đã xử lý bằng thiết kế: câu gốc theo câu hỏi trong ME và dự phòng đọc lại trong MEF. Nếu ME vẫn kém W5 nhiều thì cân nhắc tăng phần ngân sách cho câu gốc |
 | BM25 chọn sai câu | ME thua M ở câu hỏi diễn đạt khác văn bản hoặc cần nhiều câu (QA nhiều tài liệu) | Phân tích lỗi theo loại câu hỏi; thử bộ chọn theo embedding hoặc W4 nếu cần |
 | Reader trả lời sai mà vẫn tự tin, nên không kích hoạt đọc lại | Tỉ lệ câu sai có log-prob trên τ cao | Báo cáo trung thực tỉ lệ này; dự phòng chỉ giảm rủi ro, không bảo đảm |
-| G1 tốn GPU hơn dự kiến | Thêm ba lượt giai đoạn 1 (8×, 16×, 32×) và bốn lượt giai đoạn 2 so với kế hoạch ban đầu | Giữ ME là bắt buộc cho cổng; W5 có thể dời sang tuần 4–6, và có thể bỏ f = 8 nếu G0 cho thấy thiếu GPU |
+| G1 tốn GPU hơn dự kiến | Thêm ba lượt giai đoạn 1 (8×, 16×, 32×) và bảy lượt giai đoạn 2 so với kế hoạch ban đầu (gồm seed 1 của ME và hai lượt đối chứng prompt) | Giữ ME là bắt buộc cho cổng; W5 có thể dời sang tuần 4–6, và có thể bỏ f = 8 nếu G0 cho thấy thiếu GPU |
 
 **Các yếu tố ảnh hưởng tính hợp lệ:**
 
-- **Nội tại:** siêu tham số và checkpoint chỉ chọn trên dev. Mốc nén cứng được dò tham số ngang bằng để tránh làm mốc so sánh "người rơm". LLMLingua dùng LM đủ mạnh.
+- **Nội tại:** siêu tham số và checkpoint chỉ chọn trên ViQuAD select, tách bài với tập cổng; tập cổng chỉ dùng cho quyết định. Mốc nén cứng được dò tham số ngang bằng để tránh làm mốc so sánh "người rơm": k1, b của BM25 dò trên select; Truncation và Lead-k không có tham số; LLMLingua-2 dùng bản xlm-roberta-large công bố. Lead-k chỉ giữ câu trọn vẹn nên ở 4× trên ViQuAD khoảng 1/3 đoạn không còn câu nào vừa ngân sách (ngữ cảnh rỗng); số của nó được báo cáo kèm tỉ lệ ngữ cảnh rỗng. Phần lợi do học kiểu đáp án được tách bằng đối chứng "prompt học được + BM25".
 - **Cấu trúc:** F1 trên âm tiết phạt các câu trả lời diễn đạt khác đi, mà nén mềm dễ sinh kiểu trả lời này hơn. Vì vậy có thêm LLM trọng tài trên một tập con, kiểm bằng κ. ViLatent-ME dùng câu hỏi lúc đọc trong khi Truncation, Lead-k và LLMLingua-2 thì không; kết quả luôn được trình bày tách hai nhóm mốc để không quy phần lợi do biết câu hỏi cho nén mềm.
 - **Ngoại tại:** chỉ có Wikipedia và tin tức, reader cỡ 2–9B, chỉ ở chế độ trả lời trực tiếp (tắt thinking). Không suy rộng sang văn bản pháp luật, hội thoại hay reader lớn hơn.
 - **Kết luận thống kê:** Holm trong từng họ giả thuyết, MDE tính trước. Các phân tích khám phá được gắn nhãn rõ ràng.

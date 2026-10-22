@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,6 +71,45 @@ def load_examples(path: str | Path, task: str, limit: int | None = None) -> list
 def short_hash(text: str) -> str:
     """Passage id used as the cluster (same definition as ViWord-C, so splits match)."""
     return hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
+
+
+def split_viquad_train(rows: list[dict], n_viwordc_passages: int = 250, gate_questions: int = 1175,
+                       select_questions: int = 600, max_article_questions: int = 200,
+                       seed: int = 0) -> tuple[dict[str, list[dict]], dict[str, list[str]]]:
+    """Split the ViQuAD train rows (with ``title`` = Wikipedia article) into train, gate,
+    select and viwordc_dev.
+
+    * viwordc_dev: ViWord-C's dev, 250 passages sampled by passage (same seed and sampling, so
+      the same questions). Its articles also have passages in train, so it is kept out of
+      training and reported as an auxiliary table only (comparison with ViWord-C).
+    * gate and select: whole articles, disjoint from train and from each other, like the test
+      split (ViQuAD validation). Articles are shuffled with ``seed``; only articles with at
+      most ``max_article_questions`` questions are eligible, so that no article dominates; gate
+      takes articles until it has ``gate_questions`` questions, then select until
+      ``select_questions``. gate is only for the G1 gate; select chooses checkpoints, f, τ and
+      the BM25 parameters.
+    * train: every other row. A passage of viwordc_dev inside a gate or select article is in
+      both files (it belongs to that article)."""
+    passages = sorted({r["cluster"] for r in rows})
+    viwordc = set(random.Random(seed).sample(passages, n_viwordc_passages))
+    per_article = Counter(r["title"] for r in rows)
+    titles = [t for t in sorted(per_article) if per_article[t] <= max_article_questions]
+    random.Random(seed).shuffle(titles)
+    held, i = {}, 0
+    for name, target in (("gate", gate_questions), ("select", select_questions)):
+        held[name], n = [], 0
+        while n < target:
+            if i == len(titles):
+                raise ValueError(f"not enough eligible articles for {name}")
+            held[name].append(titles[i])
+            n += per_article[titles[i]]
+            i += 1
+    gate, select = set(held["gate"]), set(held["select"])
+    splits = {"train": [r for r in rows if r["title"] not in gate | select and r["cluster"] not in viwordc],
+              "gate": [r for r in rows if r["title"] in gate],
+              "select": [r for r in rows if r["title"] in select],
+              "viwordc_dev": [r for r in rows if r["cluster"] in viwordc]}
+    return splits, held
 
 
 # ---------------------------------------------------------------------------- provenance

@@ -3,12 +3,20 @@
 Both paths end in ``reader.greedy_generate`` on input embeddings with the same template and
 ``max_new_tokens``. One row per question:
 
-  id, cluster, method, ratio, n_tokens (context, reader tokens), budget (k), used_tokens,
-  prediction, raw, f1, em, unreadable, repetitive, confidence (mean log-prob of the answer)
+  id, cluster, title (article), method, ratio, n_tokens (context, reader tokens), budget (k),
+  used_tokens, prediction, raw, f1, em, unreadable, repetitive, confidence (mean log-prob of
+  the answer)
 
 ViLatent rows also give memory_vectors and evidence_tokens (ME): used_tokens is their sum.
+
+Swapped memory (control of the review of 22/10/2026, ``swap_seed``): every question is read
+with the memory of another passage, from another article when possible, cut to the same
+number of vectors, while its own BM25 sentences stay. ME minus this shows what the memory
+content adds; the vector count, the sentences and the trained boundaries are unchanged.
 """
 from __future__ import annotations
+
+import random
 
 import torch
 from tqdm import tqdm
@@ -21,8 +29,10 @@ from .model import ViLatent
 from .reader import Generation, decode, embed_ids, eos_ids, greedy_generate
 from .template import ReaderTemplate
 
-# No gold answer of ViQuAD dev needs more than 128 Qwen3.5 tokens (10% need more than 32), so
-# an answer that does not end within the limit is never a correct one cut short.
+# With the Qwen3.5 tokenizer and the end-of-turn token, the shortest gold answer of a question
+# needs more than 128 tokens for 1 of the 1,228 gate questions and for none in select, the
+# ViWord-C dev or test (6–10% of the answers need more than 32), so an answer that does not
+# end within the limit is almost never a correct one cut short.
 MAX_NEW_TOKENS = {"qa": 128}
 QUERY_AGNOSTIC = {"full", "none", "truncation", "lead", "llmlingua2"}
 NO_BUDGET = {"full", "none"}
@@ -31,7 +41,8 @@ NO_BUDGET = {"full", "none"}
 def make_row(ex: Example, method: str, ratio: int | None, n_tokens: int, budget: int | None,
              used: int, raw: str, clean: str, generation: Generation, **extra) -> dict:
     prediction = parse_answer(clean)
-    return {"id": ex.id, "cluster": ex.cluster, "method": method, "ratio": ratio, "n_tokens": n_tokens,
+    return {"id": ex.id, "cluster": ex.cluster, "title": ex.extra.get("title"), "method": method, "ratio": ratio,
+            "n_tokens": n_tokens,
             "budget": budget, "used_tokens": used, "prediction": prediction, "raw": raw,
             **score_qa(prediction, ex.answers), "unreadable": is_unreadable(raw, generation.stopped),
             "repetitive": is_repetitive(clean), "confidence": generation.confidence, **extra,
@@ -50,11 +61,38 @@ def _generate_sorted(reader, seqs: list[torch.Tensor], stop_ids: set[int], batch
     return out
 
 
+def swap_memories(memory: dict, info: dict, seed: int) -> tuple[dict, dict]:
+    """Give every context the memory of a donor: another context from another article (any
+    other context when there is no other article), the one with the fewest vectors among
+    those with at least as many, ties drawn with ``seed``; its vectors are cut to the
+    receiver's count (the longest donor, repeated, when none is long enough). ``info``:
+    key -> (article, number of memory vectors). Returns the new memory and the donor of
+    every key."""
+    rng = random.Random(seed)
+    swapped, donors = {}, {}
+    for key, (title, k_m) in info.items():
+        others = [o for o in info if o != key and info[o][0] != title] or [o for o in info if o != key]
+        if not others:
+            raise ValueError("swapping memory needs at least two contexts")
+        longer = [o for o in others if info[o][1] >= k_m]
+        if longer:
+            best = min(info[o][1] for o in longer)
+            donor = rng.choice([o for o in longer if info[o][1] == best])
+        else:
+            donor = max(others, key=lambda o: info[o][1])
+        inner = memory[donor][1:-1]
+        inner = inner.repeat(-(-k_m // inner.shape[0]), 1)[:k_m]
+        swapped[key] = torch.cat([memory[key][:1], inner, memory[key][-1:]])
+        donors[key] = donor
+    return swapped, donors
+
+
 @torch.no_grad()
 def evaluate_vilatent(model: ViLatent, examples: list[Example], batch_size: int = 16,
-                      method: str = "vilatent") -> list[dict]:
+                      method: str = "vilatent", swap_seed: int | None = None) -> list[dict]:
     """Memory is written once per distinct context and reused for all its questions (M, ME);
-    W5 writes one memory per (context, question). ``ratio`` in the rows is the budget ratio r."""
+    W5 writes one memory per (context, question). ``ratio`` in the rows is the budget ratio r.
+    ``swap_seed``: read every question with another passage's memory (swap_memories)."""
     model.writer.eval()
     model.reader.eval()
     prepared = [model.prepare(ex) for ex in tqdm(examples, desc="prepare")]
@@ -68,6 +106,13 @@ def evaluate_vilatent(model: ViLatent, examples: list[Example], batch_size: int 
         for key, m in zip(keys[start:start + batch_size],
                           model.encode_memory([p.chunks for p in part], [p.question_ids for p in part])):
             memory[key] = m
+    donors = {}
+    if swap_seed is not None:
+        if model.mode == "W5":
+            raise ValueError("W5 memory depends on the question: it cannot be swapped between passages")
+        info = {k: (p.example.extra.get("title") or p.example.cluster, memory[k].shape[0] - 2)
+                for k, p in first.items()}
+        memory, donors = swap_memories(memory, info, swap_seed)
     seqs = [model.memory_prompt(p, memory[model.memory_key(p)]) for p in prepared]
     gens = _generate_sorted(model.reader, seqs, model.stop_ids, batch_size, MAX_NEW_TOKENS["qa"], method)
     rows = []
@@ -77,8 +122,9 @@ def evaluate_vilatent(model: ViLatent, examples: list[Example], batch_size: int 
         used = k_m + len(p.evidence_ids)
         if used > p.budget:
             raise RuntimeError(f"{method} exceeded the budget on {p.example.id}: {used} > {p.budget}")
+        extra = {"memory_from": first[donors[model.memory_key(p)]].example.cluster} if donors else {}
         rows.append(make_row(p.example, method, model.budget_ratio, p.n_tokens, p.budget, used, raw, clean, g,
-                             mode=model.mode, memory_vectors=k_m, evidence_tokens=len(p.evidence_ids)))
+                             mode=model.mode, memory_vectors=k_m, evidence_tokens=len(p.evidence_ids), **extra))
     return rows
 
 
@@ -122,6 +168,7 @@ def summarize(rows: list[dict]) -> dict:
                "unreadable_rate": sum(r["unreadable"] for r in rows) / n,
                "repetitive_rate": sum(r["repetitive"] for r in rows) / n,
                "mean_answer_syllables": sum(len(r["prediction"].split()) for r in rows) / n,
+               "empty_context_rate": sum(r["used_tokens"] == 0 for r in rows) / n,
                "mean_context_tokens": sum(r["n_tokens"] for r in rows) / n,
                "mean_used_tokens": sum(used) / n}
     if rows[0]["budget"] is not None:

@@ -37,7 +37,8 @@ def test_memory_factor_moves_budget_to_text(reader, tokenizer, template, factor)
     from vilatent.writer import MemoryWriter
 
     writer = MemoryWriter(reader, tokenizer, n_layers=4, ratio=2 * factor, autocast=False)
-    model = ViLatent(reader, tokenizer, template, writer, mode="ME", memory_factor=factor, chunk_tokens=12)
+    model = ViLatent(reader, tokenizer, template, writer, mode="ME", memory_factor=factor, chunk_tokens=12,
+                     bm25={"k1": 1.5, "b": 0.75})
     assert model.budget_ratio == 2
     p = model.prepare(qa(0, *QUESTIONS[0]))
     k_m = sum(math.ceil(len(c) / (2 * factor)) for c in p.chunks)
@@ -86,8 +87,56 @@ def test_mode_and_writer_must_agree(reader, tokenizer, template):
     w0 = make_model(reader, tokenizer, template).writer
     with pytest.raises(ValueError):
         ViLatent(reader, tokenizer, template, w0, mode="W5")
+    with pytest.raises(ValueError, match="BM25"):  # ME without the tuned BM25 parameters
+        ViLatent(reader, tokenizer, template, make_model(reader, tokenizer, template, mode="ME").writer, mode="ME")
     with pytest.raises(ValueError):  # stage 1 has no question: it must run in mode M
         make_model(reader, tokenizer, template, mode="ME").prepare(Example("s", "d", "continue", CONTEXT, target="x"))
+
+
+def test_swapped_memory_comes_from_another_article_with_the_same_size():
+    from vilatent.evaluate import swap_memories
+
+    def mem(k, v):  # ⟨mem⟩ + k vectors of value v + ⟨/mem⟩
+        return torch.cat([torch.zeros(1, 2), torch.full((k, 2), float(v)), torch.ones(1, 2)])
+
+    memory = {"a1": mem(3, 1), "a2": mem(3, 2), "b1": mem(3, 3), "b2": mem(5, 4), "c1": mem(2, 5)}
+    info = {"a1": ("A", 3), "a2": ("A", 3), "b1": ("B", 3), "b2": ("B", 5), "c1": ("C", 2)}
+    swapped, donors = swap_memories(memory, info, seed=0)
+    for key, (title, k_m) in info.items():
+        assert info[donors[key]][0] != title and swapped[key].shape == memory[key].shape
+        assert torch.equal(swapped[key][[0, -1]], memory[key][[0, -1]])  # own boundaries
+    assert donors["a1"] == "b1" and donors["c1"] in ("a1", "a2", "b1")  # same size first, then the smallest larger
+    # no other article has 5 vectors: the longest donor (a1, 3 vectors) is repeated to 5
+    assert donors["b2"] == "a1" and torch.equal(swapped["b2"][1:-1], torch.full((5, 2), 1.0))
+    assert swap_memories(memory, info, seed=0)[1] == donors  # seeded
+
+
+def test_me_rows_with_swapped_memory(reader, tokenizer, template):
+    model = make_model(reader, tokenizer, template, ratio=4, mode="ME")
+    other = "TP. Hồ Chí Minh là thành phố lớn nhất. Hà Nội có dân số 8,5 triệu người."
+    examples = [qa(0, *QUESTIONS[0]), qa(1, *QUESTIONS[1]),
+                Example("q2", "p1", "qa", other, question="Ai ?", answers=["Hà Nội"], target="Hà Nội")]
+    own = {r["id"]: r for r in evaluate_vilatent(model, examples, batch_size=2)}
+    swapped = evaluate_vilatent(model, examples, batch_size=2, swap_seed=0)
+    assert {r["memory_from"] for r in swapped if r["cluster"] == "p0"} == {"p1"}
+    assert all(r["used_tokens"] == own[r["id"]]["used_tokens"] for r in swapped)
+
+
+def test_prompt_writer_ignores_the_context(reader, tokenizer, template):
+    from vilatent.model import ViLatent
+    from vilatent.writer import PromptWriter, build_writer, prompt_init_ids
+
+    ids = prompt_init_ids([CONTEXT], tokenizer, n=2, seed=0)
+    writer = PromptWriter(reader, tokenizer, ratio=8, chunk_tokens=12, init_ids=ids)
+    model = ViLatent(reader, tokenizer, template, writer, mode="ME", chunk_tokens=12, bm25={"k1": 1.5, "b": 0.75})
+    a, b = model.prepare(qa(0, *QUESTIONS[0])), model.prepare(qa(1, *QUESTIONS[0], context="Hà Nội là thủ đô ."))
+    mem_a, mem_b = model.encode_memory([a.chunks, b.chunks])
+    assert mem_a.shape[0] - 2 == sum(math.ceil(len(c) / 8) for c in a.chunks)  # the ME vector count
+    assert torch.equal(mem_a[:mem_b.shape[0] - 1], mem_b[:-1])  # same vectors, whatever the context
+    model.loss([a, b], None, 0.0)["loss"].backward()
+    assert writer.prompt.grad is not None and writer.prompt.grad.abs().sum() > 0
+    rebuilt = build_writer(reader, tokenizer, writer.config())
+    assert isinstance(rebuilt, PromptWriter) and rebuilt.prompt.shape == writer.prompt.shape
 
 
 def test_confidence_is_the_mean_logprob_of_the_answer(reader, template):
