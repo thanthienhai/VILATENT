@@ -1,8 +1,9 @@
 {
   "k1": 2.0,
   "b": 1.0,
+  "units": "syllable",
   "criterion": "highest mean F1 of the bm25 baseline at 4x on data/tasks/viquad_select.jsonl (sha256 of the file written on Linux)",
-  "note": "tuned 22/10/2026 on Kaggle 2x T4 (fp16) with scripts/tune_bm25.py; fixed before G1",
+  "note": "tuned 22/10/2026 on Kaggle 2x T4 (fp16) with scripts/tune_bm25.py; fixed before G1; G1 syllable units. The paper pipeline re-tunes on pyvi words (run_paper.sh tune_bm25) and overwrites this file",
   "data": "data/tasks/viquad_select.jsonl",
   "data_sha256": "cb88b5be8329f54cc076bb866f496c953876b339db478bc76a13335c3b12a129",
   "n_questions": 621,

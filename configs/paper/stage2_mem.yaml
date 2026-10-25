@@ -1,0 +1,37 @@
+# Paper, stage 2: ONE run for ViLatent-M (f = 1) and ViLatent-ME (f >= 2) at every ratio (checklist A7,
+# A22, B9). Every example gets (r, f) drawn from r in {4, 8, 16} x f in {1, 2, 4, 8} with r·f <= 32;
+# 30% of the examples are windows of 2–8 passages of one train article (multi_share; 0.15 if short on
+# time, never 0). The checkpoint is chosen by the select loss 0.7·single + 0.3·multi, each dev example at
+# a fixed (r, f); f* is chosen later at inference, by select F1 (scripts/choose_f.py).
+reader: Qwen/Qwen3.5-2B
+reader_config: configs/readers/qwen3.5-2b.json
+task: qa
+train: data/tasks/viquad_train_clean.jsonl
+train_multi: data/tasks/viquad_train_multi.jsonl
+dev: data/tasks/viquad_select.jsonl
+dev_multi: data/tasks/viquad_select_multi.jsonl
+teacher_train: data/teacher/qwen3.5-2b/viquad_train.pt
+teacher_train_multi: data/teacher/qwen3.5-2b/viquad_train_multi.pt
+teacher_dev: data/teacher/qwen3.5-2b/viquad_select.pt
+teacher_dev_multi: data/teacher/qwen3.5-2b/viquad_select_multi.pt
+multi_share: 0.3
+init_from: runs/paper/stage1/best.pt
+out_dir: runs/paper/stage2_mem
+ratios: [4, 8, 16]
+memory_factors: [1, 2, 4, 8]
+max_pool: 32
+n_layers: 4
+lora_rank: 0
+chunk_tokens: 512
+lambda_kl: 1.0
+lr_adapter: 1.0e-4
+lr_writer: 2.0e-5
+weight_decay: 0.0
+max_grad_norm: 1.0
+warmup_frac: 0.03
+steps: 4000
+effective_batch: 32
+micro_batch: 32
+eval_every: 250
+log_every: 10
+seed: 0

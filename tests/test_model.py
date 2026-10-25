@@ -1,4 +1,5 @@
-"""W0 writer, reader input, losses and decoding on a tiny random Qwen3.5 (CPU, fp32)."""
+"""Multi-rate W0 writer, reader input, losses and decoding on a tiny random Qwen3.5 (CPU, fp32)."""
+import dataclasses
 import math
 
 import pytest
@@ -10,22 +11,20 @@ from vilatent.evaluate import evaluate_text, evaluate_vilatent
 from vilatent.model import ViLatent, load_vilatent
 from vilatent.reader import embed_ids, greedy_generate
 from vilatent.teacher import compute_teacher
-from vilatent.writer import MemoryWriter, mean_pool
+from vilatent.writer import MemoryWriter, mean_pool, pool_rows
 
 CONTEXT = ("Hà Nội là thủ đô của Việt Nam. Thành phố có diện tích 3.359 km² và dân số 8,5 triệu người. "
            "Vua Lý Thái Tổ dời đô năm 1010.")
 
 
-BM25 = {"k1": 1.5, "b": 0.75}
+BM25 = {"k1": 1.5, "b": 0.75, "units": "word"}
 
 
-def make_model(reader, tokenizer, template, ratio=4, chunk_tokens=12, mode="M"):
-    """``ratio`` is the budget ratio r; the writer pools 2r tokens in ME."""
+def make_model(reader, tokenizer, template, chunk_tokens=12, sees_question=False, frozen=False, pairs=None):
+    """One writer for every pooling ratio; (r, f) are given per example to prepare()."""
     torch.manual_seed(0)
-    writer = MemoryWriter(reader, tokenizer, n_layers=4, ratio=2 * ratio if mode == "ME" else ratio,
-                          sees_question=mode == "W5", autocast=False)
-    return ViLatent(reader, tokenizer, template, writer, mode=mode, chunk_tokens=chunk_tokens,
-                    bm25=BM25 if mode == "ME" else None)
+    writer = MemoryWriter(reader, tokenizer, n_layers=4, sees_question=sees_question, frozen=frozen, autocast=False)
+    return ViLatent(reader, tokenizer, template, writer, chunk_tokens=chunk_tokens, bm25=BM25, pairs=pairs)
 
 
 def qa(i=0, q="Ai dời đô ?", a="vua Lý Thái Tổ", context=CONTEXT):
@@ -47,17 +46,23 @@ def test_mean_pool():
     out = mean_pool(h, torch.tensor([6, 3]), 4)
     assert [o.shape[0] for o in out] == [2, 1]
     assert out[0][:, 0].tolist() == [1.5, 4.5] and out[1][:, 0].tolist() == [7.0]
+    # one ratio per row (multi-rate): row 0 at 2, row 1 at 4
+    out = pool_rows(h, torch.tensor([6, 3]), [2, 4])
+    assert out[0][:, 0].tolist() == [0.5, 2.5, 4.5] and out[1][:, 0].tolist() == [7.0]
 
 
 def test_memory_size_norm_and_padding_invariance(reader, tokenizer, template):
     model = make_model(reader, tokenizer, template)
-    p = model.prepare(qa())
+    p = model.prepare(qa(), 4)
     assert len(p.chunks) > 1
+    short_p = dataclasses.replace(p, chunks=[p.chunks[0][:3]])
     with torch.no_grad():
-        alone = model.encode_memory([p.chunks])[0]
-        short = model.encode_memory([[p.chunks[0][:3]]])[0]
-        both = model.encode_memory([p.chunks, [p.chunks[0][:3]]])
-    assert alone.shape[0] == model.budget(p) + 2 == sum(math.ceil(len(c) / 4) for c in p.chunks) + 2
+        alone = model.encode_memory([p])[0]
+        short = model.encode_memory([short_p])[0]
+        both = model.encode_memory([p, short_p])
+        at_8 = model.encode_memory([model.prepare(qa(), 8)])[0]
+    assert alone.shape[0] == p.budget + 2 == sum(math.ceil(len(c) / 4) for c in p.chunks) + 2
+    assert at_8.shape[0] == sum(math.ceil(len(c) / 8) for c in p.chunks) + 2  # same writer, another ρ
     assert torch.allclose(both[0], alone, atol=1e-5) and torch.allclose(both[1], short, atol=1e-5)
     norms = alone[1:-1].norm(dim=-1)  # W = I at init: memory norm = mean embedding norm
     assert torch.allclose(norms, torch.full_like(norms, model.writer.emb_norm), rtol=1e-2)
@@ -65,7 +70,7 @@ def test_memory_size_norm_and_padding_invariance(reader, tokenizer, template):
 
 def test_gradients_reach_the_writer(reader, tokenizer, template):
     model = make_model(reader, tokenizer, template)
-    batch = [model.prepare(qa(0)), model.prepare(qa(1, "Thành phố có diện tích bao nhiêu ?", "3.359 km²"))]
+    batch = [model.prepare(qa(0), 4), model.prepare(qa(1, "Thành phố có diện tích bao nhiêu ?", "3.359 km²"), 8, 2)]
     out = model.loss(batch, None, 0.0)
     out["loss"].backward()
     for p in (model.writer.adapter.weight, model.writer.scale, model.writer.mem_start,
@@ -102,18 +107,22 @@ def test_greedy_generate_padding_and_reference(reader, tokenizer, template):
 def test_evaluation_paths_and_checkpoint(reader, tokenizer, template, tmp_path):
     model = make_model(reader, tokenizer, template)
     examples = [qa(0), qa(1, "Thành phố có diện tích bao nhiêu ?", "3.359 km²")]
-    soft = evaluate_vilatent(model, examples, batch_size=2)
-    assert {r["budget"] for r in soft} == {model.budget(model.prepare(examples[0]))}
+    soft = evaluate_vilatent(model, examples, 4, batch_size=2)
+    assert {r["budget"] for r in soft} == {model.prepare(examples[0], 4).budget}
     assert all(r["used_tokens"] == r["budget"] for r in soft)
     hard = evaluate_text(reader, tokenizer, template, Truncation(), examples, 4, chunk_tokens=12, batch_size=2)
     assert all(r["used_tokens"] <= r["budget"] == soft[0]["budget"] for r in hard)
     full = evaluate_text(reader, tokenizer, template, Full(), examples, None, batch_size=2)
     assert all(r["budget"] is None and r["used_tokens"] == r["n_tokens"] for r in full)
 
+    model.pairs = [(4, 1), (4, 2)]
     model.save(tmp_path / "w.pt")
     loaded = load_vilatent(tmp_path / "w.pt", reader, tokenizer, template)
     loaded.writer.autocast = False
+    assert loaded.pairs == [(4, 1), (4, 2)] and loaded.bm25 == BM25
     with torch.no_grad():
-        a = model.encode_memory([model.prepare(examples[0]).chunks])[0]
-        b = loaded.encode_memory([loaded.prepare(examples[0]).chunks])[0]
+        a = model.encode_memory([model.prepare(examples[0], 4)])[0]
+        b = loaded.encode_memory([loaded.prepare(examples[0], 4)])[0]
     assert torch.allclose(a, b)
+    with pytest.raises(ValueError, match="not trained"):  # evaluation refuses pairs the writer never saw
+        evaluate_vilatent(loaded, examples, 8, 1)

@@ -1,0 +1,41 @@
+% Figure 1: ViLatent-ME and the MEF fallback. Trainable blocks are blue; the reader is frozen.
+% Absolute coordinates in mm; the drawing is 115 mm wide (LNCS text width: 122 mm).
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[x=1mm, y=1mm, font=\scriptsize,
+  box/.style={draw, rounded corners=2pt, align=center, minimum height=9mm, inner sep=2pt},
+  train/.style={box, fill=blue!10, draw=blue!60!black},
+  frozen/.style={box, fill=gray!15},
+  arr/.style={-{Stealth[length=1.5mm]}, semithick}]
+  % writing: once per document, without the question
+  \node[box, text width=14mm] (ctx) at (8,0) {Document\\$C$, $n$ tokens};
+  \node[box, text width=17mm] (chunk) at (29.5,0) {Chunks of\\$\le$\,512 tokens};
+  \node[train, text width=20mm] (writer) at (54.5,0) {Writer: copy of\\$L$ bottom layers};
+  \node[train, text width=22mm] (pool) at (82,0) {Mean of $\rho = rf$,\\RMSNorm$\cdot s$, $W_a$};
+  \node[box, text width=13mm] (memory) at (106,0) {$k_m$ memory\\vectors};
+  \draw[arr] (ctx) -- (chunk);
+  \draw[arr] (chunk) -- (writer);
+  \draw[arr] (writer) -- (pool);
+  \draw[arr] (pool) -- (memory);
+  \node[fit=(chunk)(writer)(pool)(memory), draw=blue!60!black, dashed, rounded corners=3pt, inner sep=2pt,
+        label={[font=\scriptsize\itshape, text=blue!50!black, yshift=0.5mm]above:written once per document, without the question; one writer for every $\rho$}] {};
+  % reading: the question chooses the evidence
+  \node[box, text width=13mm] (q) at (8,-16) {Question $q$};
+  \node[box, text width=38mm] (bm25) at (40,-16) {BM25 over the sentences of $C$:\\evidence $E$, $k(r) - k_m$ tokens};
+  \node[frozen, text width=38mm] (reader) at (93,-16) {Frozen reader (Qwen3.5-2B)\\input $[P;\ \mem\, m\, \cmem;\ E;\ Q]$};
+  \draw[arr] (q) -- (bm25);
+  \draw[arr] (bm25) -- (reader);
+  \draw[arr] (17.75,0) -- (17.75,-8.5) -| ($(bm25.north west)+(8,0)$);
+  \draw[arr] (memory.south) -- (memory.south |- reader.north);
+  \draw[arr] (q.south) -- ++(0,-5) -| ($(reader.south west)+(6,0)$);
+  % answer and fallback
+  \node[box, text width=22mm] (ans) at (100,-33) {Answer $\hat y$,\\confidence $c$};
+  \node[box, dashed, text width=50mm] (full) at (50,-33) {ViLatent-MEF: if $\hat y \notin E$ or $c < \tau$,\\read BM25 at $2k(r)$ (same checks),\\then the full $C$};
+  \draw[arr] (reader.south -| ans.north) -- (ans.north);
+  \draw[arr, dashed] (ans) -- (full);
+\end{tikzpicture}
+\caption{ViLatent-ME at a budget ratio $r$. The writer and the adapter (blue) are trained; the reader is frozen.
+The memory ($k_m = k(rf)$ vectors) and the BM25 evidence share the budget $k(r)$ of Eq.~\eqref{eq:budget}.
+ViLatent-MEF reads more text when the answer is not in the evidence $E$ or its confidence is below $\tau$.}
+\label{fig:overview}
+\end{figure}

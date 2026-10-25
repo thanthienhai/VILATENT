@@ -219,7 +219,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# ViLatent: data, checkpoints, results and run logs are not tracked (see docs/RUN_G0_G1.md)
+# ViLatent: data, checkpoints, results and run logs are not tracked (see docs/RUN_PAPER.md)
 /data/
 /runs/
 /results/

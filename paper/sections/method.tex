@@ -1,0 +1,97 @@
+\section{ViLatent}
+\label{sec:method}
+
+ViLatent trains only a writer and its adapter, never the reader (Fig.~\ref{fig:overview}).
+
+\input{figures/overview}
+
+\subsection{Reader-Token Budget}
+\label{sec:budget}
+Every method, soft or hard, reads a document within the same reader-token budget $k(r)$, computed by one function for training, evaluation and every baseline (safeguard~(iii) in Sect.~\ref{sec:intro}).
+A document $C$ of $n$ reader tokens, a passage or a whole article, is cut into chunks $c_1,\dots,c_m$ of at most 512 tokens that end at sentence boundaries, with sentences packed greedily.
+For a compression ratio $r$, the budget is
+\begin{equation}
+k(r) = \sum_{i=1}^{m} \left\lceil n_i / r \right\rceil, \qquad n_i = |c_i| .
+\label{eq:budget}
+\end{equation}
+A hard compressor receives a text of at most $k(r)$ reader tokens, counted as the text sits in the prompt; ViLatent receives at most $k(r)$ input positions, vectors and text tokens together.
+The two learned boundary embeddings \mem{} and \cmem{} are not counted, just as the label that introduces the passage in a text prompt is not.
+
+\subsection{Multi-Rate Writer}
+\label{sec:writer}
+The writer is a trainable copy of the reader's bottom $L = 4$ decoder layers.
+Unlike LatentPress, which trains only the head on top of the copied layers~\cite{xu2026latentpress}, ViLatent trains these layers too, at a lower learning rate.
+In Qwen3.5, layers come in groups of three Gated DeltaNet layers~\cite{yang2025gdn} and one gated attention layer, so $L = 4$ is the shallowest writer with an attention layer.
+Chunks are encoded independently, each preceded by a fixed sink token whose state is discarded, because the first position of a sequence can carry very large activations.
+Let $h_1,\dots,h_{n_i}$ be the output states of chunk $c_i$ and $G_j$ the $j$-th group of $\rho$ consecutive positions (the last group may be shorter).
+The $j$-th memory vector is
+\begin{equation}
+m_{ij} = W_a \, \Big( s \cdot \mathrm{RMSNorm}\big(\tfrac{1}{|G_j|} \textstyle\sum_{t \in G_j} h_t \big) \Big),
+\label{eq:pool}
+\end{equation}
+where $W_a \in \mathbb{R}^{d \times d}$ starts as the identity and the scalar $s$ starts at the value that gives memory vectors the mean $\ell_2$ norm of the reader's input embeddings.
+The states $h_t$ do not depend on the pooling ratio $\rho$, so one writer can pool at any ratio: we train a single writer with $\rho$ drawn for every example, and $W_a$ and $s$ are shared by all ratios.
+The writer layers, $s$, $W_a$ and the boundary embeddings (initialised from the embeddings of ``\guillemotleft'' and ``\guillemotright'') are trained; for Qwen3.5-2B ($d=2048$) the adapter alone has 4.19M parameters.
+The memory replaces the document text in the reader input:
+\begin{equation}
+x = \big[\, P;\ \mem;\ m_1, \dots, m_{k_m};\ \cmem;\ E;\ Q \,\big],
+\label{eq:input}
+\end{equation}
+where $P$ is the instruction, $E$ the evidence text (empty except for ViLatent-ME) and $Q$ the question followed by the start of the assistant turn.
+Memory vectors take consecutive position ids, like ordinary tokens.
+The chat template is rendered once with thinking disabled and frozen, so the teacher, training, evaluation and the hard baselines see identical prompt tokens.
+
+\subsection{Reading With the Question}
+\label{sec:modes}
+\textbf{ViLatent-ME}, our main system, splits the budget between a coarse memory and original sentences chosen for the question (Table~\ref{tab:modes}; M, E and F stand for memory, evidence and fallback).
+It pools at $\rho = r f$ with a memory factor $f \in \{2,4,8\}$, so the memory takes $k_m = k(rf)$ positions and the remaining $k(r) - k(rf)$, about $1 - 1/f$ of the budget, hold evidence; \textbf{ViLatent-M} is the special case $f = 1$, with the whole budget given to the memory.
+Since one checkpoint serves every $f$, the memory share is chosen at inference.
+Sentences are scored with Okapi BM25~\cite{robertson2009bm25} over the sentences of the document, on lowercased words segmented with pyvi\footnote{\url{https://github.com/trungtv/pyvi}}, Vietnamese words being multi-syllabic; question words (\viet{ai}, \viet{gì}, \viet{nào}, \viet{đâu}, \viet{bao nhiêu}, \viet{tại sao}, \dots) are removed from the query.
+Sentences with a positive score are packed whole in decreasing score order while they fit, the rest of the budget is filled with the head of the best sentence that did not fit, cut at a reader token, and the selection is restored to document order and placed right after \cmem{}.
+The writer never sees the question, so a document is encoded once and its memory serves all of its questions.
+
+\textbf{ViLatent-MEF} wraps ME in a three-stage cascade with one threshold $\tau$ on the mean log-probability of the answer tokens (end-of-turn included).
+(1)~The ME answer is accepted if it is \emph{in the evidence}, i.e.\ its syllables occur contiguously in $E$, and its confidence is at least $\tau$.
+(2)~Otherwise the reader answers from BM25 sentences with a budget of $2k(r)$, accepted under the same two checks against that text.
+(3)~Otherwise it reads the full document.
+A question thus costs at most $k(r)$, $3k(r)$ or $3k(r) + n$ reader tokens, depending on the stage at which it stops.
+The evidence check rejects answers that only the memory supports.
+$\tau$ is the value with the lowest mean cost whose F1 on the selection split reaches 95\% of full-context F1; any value between two adjacent confidences gives the same result there, so $\tau$ is set to their midpoint.
+
+% ViLatent-Q is called W5 in the code and in docs/VILATENT.md.
+\textbf{ViLatent-Q}, a diagnostic variant rather than a proposed system, measures the cost of query-blind writing, at $r = 4$ only: its writer reads $[\text{sink}; q; c_i]$, the states of the sink and of the question are dropped, and the chunk is pooled exactly as in ViLatent-M ($\rho = 4$).
+It differs from ViLatent-M only in what the writer sees, but its memory must be written again for every question.
+
+\begin{table}[t]
+\caption{Read modes at a budget ratio $r$. Every mode uses at most $k(r)$ reader positions; MEF reads $2k(r)$ BM25 tokens and then the full document ($n$ tokens) for the questions that reach stages 2 and 3. ViLatent-M is ViLatent-ME with $f = 1$.}
+\label{tab:modes}
+\centering\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Mode & \shortstack{Writer\\sees $q$} & \shortstack{Pooling\\$\rho$} & Vectors & Text tokens & \shortstack{Reusable\\memory} \\
+\midrule
+Hard baselines & -- & -- & 0 & $\le k(r)$ & -- \\
+ViLatent-M & no & $r$ & $k(r)$ & 0 & yes \\
+ViLatent-ME & no & $rf$ & $k(rf)$ & $\le k(r) - k(rf)$ & yes \\
+ViLatent-MEF & no & $rf$ & $k(rf)$ & as ME; $+\,2k(r)$; $+\,n$ & yes \\
+ViLatent-Q & yes & $4$ & $k(4)$ & 0 & no \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Training}
+\label{sec:training}
+The teacher is the frozen reader itself reading the full document, so no label comes from another model.
+For a target $y$ the loss is
+\begin{equation}
+\mathcal{L} = -\sum_t \log p_\theta(y_t \mid x, y_{<t}) + \lambda \sum_t \mathrm{KL}\big(\hat p(\cdot \mid C, q, y_{<t}) \,\big\|\, p_\theta(\cdot \mid x, y_{<t})\big),
+\label{eq:loss}
+\end{equation}
+where $p_\theta$ is the reader fed with $x$ from Eq.~\eqref{eq:input}, $\hat p$ the teacher and $\lambda = 1$.
+The teacher's top-20 log-probabilities per target token are computed once and cached, and the KL is taken over 21 bins, the top 20 and the remaining mass.
+Gradients reach the writer through the frozen reader.
+\emph{Stage~1} teaches the writer to encode Vietnamese text: the writer compresses a span $A$ of 128--1024 tokens ending at a sentence boundary, with $\rho$ drawn from $\{4, 8, 16, 32\}$, and the reader, prompted to continue the passage, is trained to produce the next 128 tokens $B$, with the teacher reading $A$ in full.
+\emph{Stage~2} trains ViLatent-M and ViLatent-ME in one run on (document, question, answer) triples: every example draws $r \in \{4, 8, 16\}$ and $f \in \{1, 2, 4, 8\}$ with $rf \le 32$, the pooling ratios seen in stage~1, and the BM25 evidence of ME is in the reader input exactly as at test time, so the memory learns to complement it.
+So that the reader learns to read long memory sequences, about 30\% of the examples are multi-passage: a window of 2--8 consecutive passages of the same training article, in article order, that contains the question's passage (4.9 passages on average, median 1,040 tokens).
+ViLatent-Q starts from the stage-1 checkpoint and runs the same stage~2 at $r = 4$, $f = 1$.

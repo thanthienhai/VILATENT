@@ -1,0 +1,15 @@
+% Abstract: 150--250 words. The result sentences are written for the outcome the pre-specified
+% rule decides; if it fails, rewrite them as a controlled finding (README.md, "Two outcomes").
+\begin{abstract}
+Soft context compression lets a frozen large language model (LLM) read a document as a few learned vectors instead of its tokens.
+We ask when such a memory is worth more than text under the same reader-token budget, for Vietnamese, where soft compression has not been studied.
+ViLatent writes a question-blind memory with a writer copied from the reader's bottom layers; a single multi-rate writer serves every compression ratio.
+At reading time, sentences selected by BM25 for the question fill the rest of the budget, and a three-stage cascade reads more text only when the answer is not found verbatim in the evidence or the reader is unsure.
+With the Qwen3.5-2B reader, we compare ViLatent with truncation, lead sentences, LLMLingua-2, BM25 and a trained PhoBERT sentence selector at 4$\times$, 8$\times$ and 16$\times$, on single UIT-ViQuAD~2.0 passages and on ViQuAD-Long, which joins all passages of an article, using article-disjoint splits, a pre-specified decision rule and a single test run.
+On ViQuAD-Long at 4$\times$, ViLatent reaches \tbd{} F1 against \tbd{} for the best hard compressor (difference \tbd{}, 95\% CI [\tbd{}, \tbd{}]), and across ratios its advantage over text \tbd{} as the budget shrinks.
+A learned context-free prompt with the same evidence and memory swapped from another article separate memory content from learned answer style.
+Query-blind writing costs \tbd{} F1 against a writer that sees the question, and the cascade keeps \tbd\% of full-context F1 with \tbd{} reader tokens per question.
+We release code, checkpoints and splits.
+
+\keywords{Context compression \and Soft prompts \and Large language models \and Vietnamese \and Question answering \and Long documents}
+\end{abstract}

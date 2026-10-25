@@ -1,7 +1,13 @@
 """The W0 writer (docs/VILATENT.md §Kiến trúc ViLatent, items 1–4).
 
     chunk ids ──► [sink] + chunk ──► L bottom layers of the reader (trainable copy)
-              ──► drop the sink ──► mean of every r tokens ──► RMSNorm × s ──► adapter W (d×d)
+              ──► drop the sink ──► mean of every ρ tokens ──► RMSNorm × s ──► adapter W (d×d)
+
+* Multi-rate (revision of 25/10/2026): the hidden states h_t do not depend on the pooling ratio
+  ρ, so one writer serves every ρ. ρ is an argument of ``forward`` (one value per chunk); W and
+  s are shared by all ratios. Training samples ρ per example (vilatent.train).
+* ``frozen`` (the LatentPress-style baseline, checklist A23): the copied layers are not trained,
+  only s, W and the boundary embeddings.
 
 * The body is a copy of the reader's L bottom decoder layers, built as the reader's own text
   model class with ``num_hidden_layers = L``, so rotary embeddings, masks and the Gated
@@ -24,6 +30,17 @@ import random
 
 import torch
 from torch import nn
+
+
+def pool_rows(h: torch.Tensor, lengths: torch.Tensor, ratios: list[int]) -> list[torch.Tensor]:
+    """mean_pool with one ratio per row of ``h``."""
+    out = [None] * h.shape[0]
+    for ratio in sorted(set(ratios)):
+        idx = [i for i, r in enumerate(ratios) if r == ratio]
+        sel = torch.tensor(idx, device=h.device)
+        for i, pooled in zip(idx, mean_pool(h[sel], lengths[sel], ratio)):
+            out[i] = pooled
+    return out
 
 
 def mean_pool(h: torch.Tensor, lengths: torch.Tensor, ratio: int) -> list[torch.Tensor]:
@@ -72,8 +89,8 @@ def text_embedding(reader, tokenizer, text: str) -> torch.Tensor:
 
 
 class MemoryWriter(nn.Module):
-    def __init__(self, reader, tokenizer, n_layers: int = 4, ratio: int = 4, lora_rank: int = 0,
-                 sees_question: bool = False, autocast: bool = True):
+    def __init__(self, reader, tokenizer, n_layers: int = 4, lora_rank: int = 0, sees_question: bool = False,
+                 frozen: bool = False, autocast: bool = True):
         super().__init__()
         base = reader.model  # the reader's text model (Qwen3_5TextModel, MistralModel, Qwen2Model…)
         cfg = copy.deepcopy(base.config)
@@ -92,9 +109,14 @@ class MemoryWriter(nn.Module):
             raise RuntimeError(f"writer copy failed: missing={missing} unexpected={unexpected}")
         body.norm = nn.Identity()
         self.body = body.float()
+        if frozen and lora_rank:
+            raise ValueError("a frozen writer has no LoRA")
+        self.frozen = frozen
+        if frozen:
+            self.body.requires_grad_(False)
 
         d = cfg.hidden_size
-        self.n_layers, self.ratio, self.lora_rank, self.autocast = n_layers, ratio, lora_rank, autocast
+        self.n_layers, self.lora_rank, self.autocast = n_layers, lora_rank, autocast
         self.sees_question = sees_question  # W5: [sink][question][chunk]; W0: [sink][chunk]
         self.layer_types = list(cfg.layer_types) if layer_types is not None else ["full_attention"] * n_layers
         self.autocast_dtype = reader.get_input_embeddings().weight.dtype
@@ -121,19 +143,20 @@ class MemoryWriter(nn.Module):
                                             self.body)
 
     def config(self) -> dict:
-        return {"n_layers": self.n_layers, "ratio": self.ratio, "lora_rank": self.lora_rank,
-                "sees_question": self.sees_question}
+        return {"n_layers": self.n_layers, "lora_rank": self.lora_rank, "sees_question": self.sees_question,
+                "frozen": self.frozen}
 
     def shape_config(self) -> dict:
         """The settings that fix the parameter shapes: a W0 stage-1 checkpoint can start a W5
         writer (seeing the question adds no parameter)."""
-        return {"n_layers": self.n_layers, "ratio": self.ratio, "lora_rank": self.lora_rank}
+        return {"n_layers": self.n_layers, "lora_rank": self.lora_rank}
 
     def param_groups(self, lr_adapter: float, lr_writer: float) -> list[dict]:
-        """Adapter, scale and boundary embeddings at lr_adapter; writer layers at lr_writer."""
+        """Adapter, scale and boundary embeddings at lr_adapter; writer layers at lr_writer
+        (none when frozen)."""
         head = [self.scale, self.mem_start, self.mem_end, *self.adapter.parameters()]
         body = [p for p in self.body.parameters() if p.requires_grad]
-        return [{"params": head, "lr": lr_adapter}, {"params": body, "lr": lr_writer}]
+        return [{"params": head, "lr": lr_adapter}] + ([{"params": body, "lr": lr_writer}] if body else [])
 
     def checked_params(self) -> list[tuple[str, torch.Tensor]]:
         """Parameters whose gradient must be finite and non-zero after the first step."""
@@ -143,23 +166,26 @@ class MemoryWriter(nn.Module):
         x = x.float()
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.scale
 
-    def forward(self, chunk_embeds: torch.Tensor, starts: torch.Tensor, lengths: torch.Tensor) -> list[torch.Tensor]:
+    def forward(self, chunk_embeds: torch.Tensor, starts: torch.Tensor, lengths: torch.Tensor,
+                ratios: list[int]) -> list[torch.Tensor]:
         """``chunk_embeds`` (C, T, d): reader embeddings of [sink] (+ question, W5) + chunk,
         right-padded. ``starts`` (C,): position of the first chunk token (1 for W0, 1 + question
         length for W5); everything before it is dropped. ``lengths`` (C,): number of chunk
-        tokens. Returns one (ceil(n_i / r), d) memory tensor per chunk."""
+        tokens. ``ratios``: pooling ratio ρ of every chunk. Returns one (ceil(n_i / ρ_i), d)
+        memory tensor per chunk."""
         total = starts + lengths
         mask = (torch.arange(chunk_embeds.shape[1], device=lengths.device)[None, :] < total[:, None]).long()
         device_type = chunk_embeds.device.type
         enabled = self.autocast and self.autocast_dtype in (torch.bfloat16, torch.float16)
         with torch.autocast(device_type, dtype=self.autocast_dtype, enabled=enabled):
-            h = self.body(inputs_embeds=chunk_embeds.float(), attention_mask=mask,
-                          use_cache=False).last_hidden_state
+            with torch.set_grad_enabled(torch.is_grad_enabled() and not self.frozen):
+                h = self.body(inputs_embeds=chunk_embeds.float(), attention_mask=mask,
+                              use_cache=False).last_hidden_state
             # keep only the chunk positions of every row: h[i, starts[i] : starts[i] + lengths[i]]
             idx = (starts[:, None] + torch.arange(int(lengths.max()), device=h.device)[None, :]).clamp(
                 max=h.shape[1] - 1)
             h = h.gather(1, idx[..., None].expand(-1, -1, h.shape[-1]))
-            pooled = mean_pool(h, lengths, self.ratio)
+            pooled = pool_rows(h, lengths, ratios)
             sizes = [p.shape[0] for p in pooled]
             memory = self.adapter(self.normalize(torch.cat(pooled)))
         return list(memory.split(sizes))
@@ -176,20 +202,21 @@ def prompt_init_ids(texts: list[str], tokenizer, n: int, seed: int = 0, n_texts:
 
 class PromptWriter(nn.Module):
     """Control for ViLatent-ME (review of 22/10/2026): the memory is replaced by learned vectors
-    that do not depend on the context. A chunk of n tokens receives the first ceil(n / r)
-    vectors of one learned table, so the reader gets exactly the vector count, the boundary
-    embeddings and the BM25 sentences of ME, and the same training (CE + λ·KL on the answers).
+    that do not depend on the context. A chunk of n tokens pooled at ρ receives the first
+    ceil(n / ρ) vectors of one learned table (ceil(chunk_tokens / min_ratio) vectors, so it
+    serves every ratio of a multi-rate run), so the reader gets exactly the vector count, the
+    boundary embeddings and the BM25 sentences of ME, and the same training (CE + λ·KL).
     What this control learns is the answer style of the training set, not the context, so
     ME minus this control is what the memory content adds (a condition of gate G1).
 
     It has the interface of MemoryWriter (forward, config, param_groups, mem_start/mem_end);
     the vectors start as embeddings of tokens of training contexts (prompt_init_ids)."""
 
-    def __init__(self, reader, tokenizer, ratio: int, chunk_tokens: int, init_ids: list[int] | None = None):
+    def __init__(self, reader, tokenizer, min_ratio: int, chunk_tokens: int, init_ids: list[int] | None = None):
         super().__init__()
         weight = reader.get_input_embeddings().weight
-        self.ratio, self.chunk_tokens = ratio, chunk_tokens
-        self.n_prompt = math.ceil(chunk_tokens / ratio)  # the most vectors one chunk can need
+        self.min_ratio, self.chunk_tokens = min_ratio, chunk_tokens
+        self.n_prompt = math.ceil(chunk_tokens / min_ratio)  # the most vectors one chunk can need
         self.sees_question = False
         self.emb_norm = mean_embedding_norm(reader)
         init = (weight[torch.tensor(init_ids, device=weight.device)].float() if init_ids is not None
@@ -202,7 +229,7 @@ class PromptWriter(nn.Module):
         self.to(weight.device)
 
     def config(self) -> dict:
-        return {"kind": "prompt", "ratio": self.ratio, "chunk_tokens": self.chunk_tokens}
+        return {"kind": "prompt", "min_ratio": self.min_ratio, "chunk_tokens": self.chunk_tokens}
 
     def shape_config(self) -> dict:
         return self.config()
@@ -214,9 +241,10 @@ class PromptWriter(nn.Module):
     def checked_params(self) -> list[tuple[str, torch.Tensor]]:
         return [("prompt", self.prompt)]
 
-    def forward(self, chunk_embeds: torch.Tensor, starts: torch.Tensor, lengths: torch.Tensor) -> list[torch.Tensor]:
-        """Same signature as MemoryWriter.forward; only ``lengths`` is used."""
-        groups = ((lengths + self.ratio - 1) // self.ratio).tolist()
+    def forward(self, chunk_embeds: torch.Tensor, starts: torch.Tensor, lengths: torch.Tensor,
+                ratios: list[int]) -> list[torch.Tensor]:
+        """Same signature as MemoryWriter.forward; only ``lengths`` and ``ratios`` are used."""
+        groups = [math.ceil(int(n) / r) for n, r in zip(lengths.tolist(), ratios)]
         if max(groups) > self.n_prompt:
             raise ValueError(f"a chunk needs {max(groups)} vectors, the prompt has {self.n_prompt}")
         return [self.prompt[:g] for g in groups]

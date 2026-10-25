@@ -1,4 +1,4 @@
-"""Text utilities: normalization, regex sentence splitting and syllables.
+"""Text utilities: normalization, regex sentence splitting, syllables and words.
 
 Sentence boundaries drive the chunking of the writer (chunks always end at a sentence end,
 docs/VILATENT.md §Kiến trúc, item 1) and the Lead-k and BM25 baselines, so all of them use
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 
 # Lowercase tokens (without their final period) after which a period does not end a sentence.
 ABBREVIATIONS = {
@@ -28,8 +29,42 @@ def normalize(text: str) -> str:
 
 
 def syllables(text: str) -> list[str]:
-    """Lowercased syllables without punctuation, the unit of QA F1 and of BM25."""
+    """Lowercased syllables without punctuation, the unit of QA F1."""
     return re.findall(r"\w+", text.lower())
+
+
+# Question words (after pyvi segmentation, lowercased): removed from BM25 queries, where they only
+# match unrelated sentences ("năm nào" would match every "nào" of the passage). Revision of 25/10/2026.
+QUESTION_WORDS = {
+    "ai", "gì", "nào", "đâu", "sao", "mấy", "bao_nhiêu", "bao_giờ", "bao_lâu", "bao_xa", "vì_sao", "tại_sao",
+    "thế_nào", "như_thế_nào", "ra_sao", "khi_nào", "lúc_nào", "nơi_nào", "chỗ_nào", "là_gì", "cái_gì",
+    "điều_gì", "việc_gì", "người_nào",
+}
+
+
+@lru_cache(maxsize=500_000)
+def _segment(text: str) -> tuple[str, ...]:
+    return tuple(w for w in segment(text).lower().split() if re.search(r"\w", w))
+
+
+@lru_cache(maxsize=500_000)
+def segment(text: str) -> str:
+    """pyvi word segmentation of the text, case and punctuation kept: the input format of PhoBERT."""
+    from pyvi import ViTokenizer
+
+    return ViTokenizer.tokenize(normalize(text))
+
+
+def words(text: str) -> list[str]:
+    """Lowercased Vietnamese words (pyvi segmentation; syllables of one word joined by "_"), without
+    punctuation: the unit of BM25 and of the PhoBERT selector input. Cached: the sentences of a
+    context are scored again for every question on it."""
+    return list(_segment(text))
+
+
+def query_words(question: str) -> list[str]:
+    """Words of a question without the question words (QUESTION_WORDS)."""
+    return [w for w in words(question) if w not in QUESTION_WORDS]
 
 
 def _is_abbreviation(text: str, punct_start: int) -> bool:

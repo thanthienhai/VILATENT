@@ -1,12 +1,14 @@
-"""Tune k1 and b of the BM25 sentence selection on ViQuAD select, before G1 (decision of
-22/10/2026; docs/VILATENT.md, "Nội tại": hard baselines are tuned as much as the method).
+"""Tune k1 and b of the BM25 sentence selection on ViQuAD select, before any ViLatent run (decision
+of 22/10/2026; docs/VILATENT.md, "Nội tại": hard baselines are tuned as much as the method).
+Re-run on 25/10/2026 after the switch to pyvi words without question words (``--units word``,
+the default; G1 tuned syllables: k1 = 2.0, b = 1.0).
 
 For every (k1, b) of the grid, the bm25 baseline compresses each context of --data to the
 budget k of --ratio and the reader answers greedily, exactly as scripts/evaluate.py does; the
 pair with the highest mean F1 wins (ties: the earlier pair in the grid, which starts with the
 textbook values 1.5 / 0.75). Prompts that several pairs share are generated once. The result
 goes to configs/bm25.json, read by the bm25 baseline and by ViLatent-ME (its sentences), and
-is fixed before G1. The select split is disjoint from the gate split by article.
+is fixed before training. The select split is disjoint from the gate split by article.
 
 Usage:
   python scripts/tune_bm25.py --reader Qwen/Qwen3.5-2B --reader-config configs/readers/qwen3.5-2b.json \
@@ -34,6 +36,7 @@ def main():
     ap.add_argument("--ratio", type=int, default=4)
     ap.add_argument("--k1", type=float, nargs="+", default=[1.5, 0.9, 1.2, 2.0])
     ap.add_argument("--b", type=float, nargs="+", default=[0.75, 0.3, 0.5, 1.0])
+    ap.add_argument("--units", choices=["word", "syllable"], default="word")
     ap.add_argument("--chunk-tokens", type=int, default=512)
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--limit", type=int, default=None)
@@ -51,7 +54,7 @@ def main():
     grid = list(itertools.product(args.k1, args.b))
     prompts, per_pair = {}, {}  # prompt ids -> index; pair -> prompt index of every question
     for k1, b in grid:
-        selector = BM25Sentences(k1, b)
+        selector = BM25Sentences(k1, b, args.units)
         idx = []
         for ex in examples:
             ids = tuple(template.text_prompt("qa", selector.compress(ex.context, ex.question, budgets[ex.context],
@@ -68,7 +71,7 @@ def main():
         results.append({"k1": k1, "b": b, "f1": 100 * sum(s["f1"] for s in scores) / len(scores),
                         "em": 100 * sum(s["em"] for s in scores) / len(scores)})
     best = max(results, key=lambda r: r["f1"])  # max keeps the first of equal values
-    cfg = {"k1": best["k1"], "b": best["b"],
+    cfg = {"k1": best["k1"], "b": best["b"], "units": args.units,
            "criterion": f"highest mean F1 of the bm25 baseline at {args.ratio}x on {args.data}",
            "data": args.data, "data_sha256": sha256_file(args.data), "n_questions": len(examples),
            "reader": args.reader, "dtype": args.dtype, "quant": args.quant, "ratio": args.ratio, "grid": results}

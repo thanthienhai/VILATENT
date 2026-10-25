@@ -1,0 +1,19 @@
+\section{Related Work}
+\label{sec:related}
+% Descriptions and numbers are checked against the sources in notes/references_verified.md.
+
+\paragraph{Hard compression.}
+Hard compressors keep the input human-readable and need no access to the reader's weights.
+LLMLingua prunes tokens by the perplexity of a small model under a budget controller~\cite{jiang2023llmlingua}, LongLLMLingua makes this question-aware~\cite{jiang2024longllmlingua}, and LLMLingua-2 casts compression as keep-or-drop token classification with a multilingual encoder~\cite{pan2024llmlingua2}.
+Hard selection is both a competitor and a part of ViLatent, whose evidence is a question-aware sentence selection.
+
+\paragraph{Soft compression.}
+Gist tokens compress a prompt through modified attention masks~\cite{mu2023gist}; ICAE trains a LoRA-adapted copy of the LLM to produce memory slots with autoencoding and language-modelling objectives~\cite{ge2024icae}; 500xCompressor passes compressed tokens as key--value pairs~\cite{li2024_500x}; xRAG maps one retriever embedding to a single input token~\cite{cheng2024xrag}.
+Recent writers keep the reader frozen and learn from its own answers: SAC drops the autoencoding objective~\cite{liu2025sac}, CMC trains a separate encoder with answer-aligned losses~\cite{rahman2026cmc}, and LatentPress, the cheapest of them and the basis of ViLatent, copies the reader's bottom layers, mean-pools their states and maps them through a linear adapter initialised to the identity, trained with cross-entropy and a KL term towards the full-context reader~\cite{xu2026latentpress}.
+None of these works reports results for Vietnamese.
+
+\paragraph{The question during compression.}
+Query-guided compressors condition the encoder on the question~\cite{cao2024qgc,louis2025oscar}, which prevents reuse; AdaMem retrains a query-agnostic and a query-aware compressor with the same data and finds the query-aware one better by 3.9 (NQ) and 5.7 (HotpotQA) points at 16$\times$~\cite{sakhno2026adamem}, while KVzip shows that a cache pruned for one query loses quality on others~\cite{kim2025kvzip}.
+Other systems keep a query-blind memory and use the question only when reading: ReadAgent looks up original pages from a gist memory~\cite{lee2024readagent}, SeDeM decompresses selected blocks of a hidden-state memory~\cite{haghifam2026sedem}, LensVLM expands selected pages of a compressed visual context back to text~\cite{xie2026lensvlm}, and Self-Route falls back to the full context when the reader declares a cheap one insufficient~\cite{li2024selfroute}.
+An analysis of information preservation finds that xRAG keeps only 22\% of dates and 26\% of cardinal numbers and suggests keeping such details as hard tokens next to a soft prompt~\cite{lajewska2025information}, which is what the evidence sentences of ViLatent do.
+ViLatent applies ``write blind, read with the question'' to a frozen reader in a language these studies do not cover, and asks at which budgets the memory is worth its positions.

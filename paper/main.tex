@@ -1,0 +1,91 @@
+% ============================================================================
+% ViLatent -- ACIIDS 2027 submission (Springer LNCS/LNAI, single column).
+%
+% Venue constraints (aciids.pwr.edu.pl/2027/submit.html, read 2026-10-23):
+%   * full paper 12--15 pages INCLUDING figures, tables and references; more pages
+%     may incur extra charges. Check with `python check_pages.py` after building.
+%   * Springer LNCS/LNAI template, PDF through EasyChair, English only.
+%   * deadline 31 October 2026 (extended), 23:59 AoE.
+%   * author names stay in the PDF (single-blind; the author list cannot change
+%     once reviewing starts).
+%   * similarity screening includes SELF-plagiarism: do not paste text from the
+%     LACC or ViWord-C papers.
+%
+% Placeholders (see README.md):
+%   \tbd       a result that does not exist yet (red "??.?")
+%   \prelim{x} a measured number that must be re-checked on the final setting (blue)
+%   \todo{...} a short note to the authors (red, draft only)
+% \draftfalse turns all three into compile errors, so a submission cannot keep one.
+% ============================================================================
+\documentclass[runningheads,a4paper]{llncs}
+
+% T5 for the Vietnamese examples (prompt, answers); the running text is T1. vntex needs
+% `nocaptions`, otherwise it renames the captions to Vietnamese ("Hình", "Bảng").
+\usepackage[T5,T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[nocaptions]{vntex}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{cite}            % numeric citations sorted and compressed: [2,5,7]
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{pgfplots}        % Figures 2 and 3 (figures/curves.tex, written by scripts/paper_figures.py)
+\pgfplotsset{compat=1.17}
+\usetikzlibrary{positioning,arrows.meta,fit,calc}
+\usepackage[hidelinks]{hyperref}
+\renewcommand\UrlFont{\color{blue}\rmfamily}
+\urlstyle{rm}
+
+\newif\ifdraft
+\drafttrue   % \draftfalse before submitting: every leftover placeholder becomes an error
+\newcommand{\tbd}{\ifdraft\textcolor{red}{??.?}\else
+  \PackageError{main}{a result placeholder (\string\tbd) is left}{Fill it from results/}\fi}
+\newcommand{\prelim}[1]{\ifdraft\textcolor{blue}{#1}\else
+  \PackageError{main}{a preliminary number (\string\prelim) is left}{Re-check it, then remove the macro}\fi}
+\newcommand{\todo}[1]{\ifdraft{\color{red}\footnotesize[TODO: #1]}\else
+  \PackageError{main}{a TODO note is left}{Resolve it}\fi}
+
+\newcommand{\mem}{\ensuremath{\langle\mathrm{mem}\rangle}}
+\newcommand{\cmem}{\ensuremath{\langle/\mathrm{mem}\rangle}}
+\newcommand{\viet}[1]{\textit{#1}}
+
+\begin{document}
+
+\title{ViLatent: Soft Context Compression with Question-Aware Evidence for a Frozen Vietnamese Reader}
+\titlerunning{ViLatent: Soft Context Compression for a Frozen Vietnamese Reader}
+
+% First author: ORCID 0009-0007-7623-2413 (public record: given names "Ngoc Thien", family name
+% "Than", Hanoi University of Industry; read 2026-10-23).
+% Names are written given names first, family name last, as in the ORCID records, so that Springer
+% indexes the family name correctly (decided 2026-10-23; the LACC paper used "Thân Ngọc Thiện").
+% TODO(authors): co-author names, affiliations, e-mails and ORCID iDs. The list cannot change
+% after reviewing starts.
+\author{Ngoc Thien Than\inst{1}\orcidID{0009-0007-7623-2413} \and
+Co-Author Name\inst{1}\orcidID{0000-0000-0000-0000}}
+\authorrunning{N. T. Than et al.}
+\institute{School of Information and Communication Technology,\\
+Hanoi University of Industry, Hanoi, Vietnam\\
+\email{thien.than@haui.edu.vn}, \email{coauthor@haui.edu.vn}}
+
+\maketitle
+
+\input{sections/abstract}
+\input{sections/introduction}
+\input{sections/related}
+\input{sections/method}
+\input{sections/setup}
+\input{sections/results}
+\input{sections/conclusion}
+
+\begin{credits}
+\subsubsection{\ackname}
+\todo{GPU provider, funding, the operators who ran the experiments.}
+
+\subsubsection{\discintname}
+The authors have no competing interests to declare that are relevant to the content of this article.
+\end{credits}
+
+\bibliographystyle{splncs04}
+\bibliography{references}
+\end{document}

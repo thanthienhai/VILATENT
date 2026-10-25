@@ -1,0 +1,44 @@
+\section{Introduction}
+\label{sec:intro}
+
+Context compression lowers the cost of reading a document with a large language model (LLM), here called the \emph{reader}, by shortening what it has to process; the saving adds up when the same document is queried many times.
+\emph{Hard} compressors keep part of the original text, either tokens scored by a small model~\cite{jiang2023llmlingua,pan2024llmlingua2} or text chosen for the question~\cite{jiang2024longllmlingua}.
+\emph{Soft} compressors encode the context into continuous vectors that the reader consumes through its input embeddings~\cite{mu2023gist,ge2024icae,cheng2024xrag,li2024_500x}; recent designs keep the reader frozen and train only a small encoder, the \emph{writer}, by distilling the answers the same reader gives with the full context~\cite{xu2026latentpress,liu2025sac,rahman2026cmc}.
+
+The two families fail differently.
+A selected sentence reaches the reader verbatim, with its numbers and names intact, but whatever is not selected is lost.
+A soft memory touches every part of the document, but blurs it: for one soft compressor, only about a quarter of dates and cardinal numbers survive in text reconstructed from its memory~\cite{lajewska2025information}.
+Which loss hurts more should depend on the budget and on the document: when the budget is generous or the document short, a good selector may already include the answer, whereas a tight budget over a long document leaves text selection little room.
+We therefore ask \emph{when soft memory is more worthwhile than text under the same reader-token budget}, rather than whether one family wins everywhere.
+We study the question for Vietnamese: to our knowledge no soft compressor has been reported for it, and for extractive compressors results do not carry over evenly across languages~\cite{lukauskas2026lost}; we treat language as a coverage gap and do not test whether Vietnamese itself makes compression harder.
+
+A writer that ignores the question makes the memory reusable, since caches compressed for one query lose quality when reused for others~\cite{kim2025kvzip}, but it may drop the detail a later question needs.
+Writers that see the question~\cite{cao2024qgc,louis2025oscar} avoid this loss but give up reuse; trained under identical conditions, a query-aware compressor beats its query-agnostic counterpart by up to 5.7 points~\cite{sakhno2026adamem}.
+Systems that read a gist and then return to the original text keep reuse and recover most of the loss~\cite{lee2024readagent,xie2026lensvlm}, and routing uncertain questions to the full context keeps quality close to full reading at lower cost~\cite{li2024selfroute}.
+
+ViLatent combines these observations for a frozen Vietnamese reader: \emph{write once, read with the question}.
+A writer built from the reader's bottom layers compresses each document once, without the question; since its states do not depend on the pooling ratio, one multi-rate writer serves every ratio and every split of the budget.
+When a question arrives, BM25~\cite{robertson2009bm25} selects original sentences, and memory and sentences share one reader-token budget, the same budget every hard baseline receives.
+A three-stage cascade then reads more text only when needed: it accepts the answer if it appears verbatim in the evidence and the reader is confident, otherwise it reads a larger BM25 selection, and as a last resort the full document.
+
+A trained compressor compared with untrained baselines can win for the wrong reasons, and the evaluation guards against three of them.
+(i)~\emph{Leakage.} UIT-ViQuAD passages come from Wikipedia articles~\cite{nguyen2020viquad,nguyen2022vlsp}; in our earlier passage-level split, 81\% of the training questions came from the articles of the dev passages, so all held-out sets are now split by article.
+(ii)~\emph{Answer style.} ViLatent learns from gold answers while most hard baselines are zero-shot; a learned context-free prompt with the same evidence and training, a memory swapped from another article, and a trained hard selector bound this effect.
+(iii)~\emph{Budget.} Memory vectors count like text tokens, and the free parameters of the hard baselines are tuned on the selection split.
+% TODO(authors): cite the LACC paper here if it is published or under review and citable
+% ("hard compression reached a ceiling in our earlier study"); do not reuse its text.
+
+We ask three questions.
+\textbf{RQ1:} at equal budget, does ViLatent-ME beat hard compression on long documents (ViQuAD-Long) and single passages at 4$\times$, 8$\times$ and 16$\times$, and does its advantage come from the memory content rather than from learned answer style?
+\textbf{RQ2:} what does query-blind writing cost against a writer that sees the question?
+\textbf{RQ3:} how many reader tokens does a cascade need to retain 95\% of full-context F1?
+Our contributions are:
+\begin{itemize}
+\item ViLatent, to our knowledge the first soft compressor for a frozen Vietnamese reader and for a reader that mixes Gated DeltaNet~\cite{yang2025gdn} and attention layers, Qwen3.5~\cite{qwen35}, with a \emph{multi-rate} writer: one checkpoint for all compression ratios and memory shares (Sect.~\ref{sec:method}).
+\item ViQuAD-Long, an article-level version of UIT-ViQuAD~2.0, and a controlled soft-versus-hard comparison across ratios with article-disjoint splits, a pre-specified decision rule and answer-style controls (Sect.~\ref{sec:setup}).
+\item A cascade with an answer-in-evidence check, and end-to-end cost accounting that includes the writer: latency and the number of questions per document at which writing pays off (Sect.~\ref{sec:results}).
+\item Code, checkpoints and splits.\todo{repository URL}
+\end{itemize}
+% Findings, one sentence per RQ, filled from results/ after the test run. If the rule fails (outcome B,
+% README.md item 3), say which condition failed and what the controls show.
+On ViQuAD-Long test at 4$\times$, ViLatent-ME reaches \tbd{} F1 against \tbd{} for the best hard compressor (95\% CI of the difference [\tbd, \tbd]) and \tbd{} for the learned prompt with the same evidence, and the gap \tbd{} from 4$\times$ to 16$\times$ (RQ1); seeing the question changes F1 by \tbd{} (RQ2); the cascade keeps 95\% of full-context F1 at \tbd{} tokens per question (RQ3).

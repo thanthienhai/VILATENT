@@ -1,0 +1,36 @@
+# Paper, stage 2, ViLatent-Q (W5; checklist A9, B17, if time permits): the writer reads the question,
+# [sink][question][chunk], at r = 4 only (diagnostic for RQ2), from the multi-rate stage-1 writer, with
+# the multi-passage share of stage2_mem. Q differs from ViLatent-M at r = 4 only by what the writer sees.
+reader: Qwen/Qwen3.5-2B
+reader_config: configs/readers/qwen3.5-2b.json
+task: qa
+train: data/tasks/viquad_train_clean.jsonl
+train_multi: data/tasks/viquad_train_multi.jsonl
+dev: data/tasks/viquad_select.jsonl
+dev_multi: data/tasks/viquad_select_multi.jsonl
+teacher_train: data/teacher/qwen3.5-2b/viquad_train.pt
+teacher_train_multi: data/teacher/qwen3.5-2b/viquad_train_multi.pt
+teacher_dev: data/teacher/qwen3.5-2b/viquad_select.pt
+teacher_dev_multi: data/teacher/qwen3.5-2b/viquad_select_multi.pt
+multi_share: 0.3
+init_from: runs/paper/stage1/best.pt
+out_dir: runs/paper/stage2_q
+sees_question: true
+ratios: [4]
+memory_factors: [1]
+max_pool: 32
+n_layers: 4
+lora_rank: 0
+chunk_tokens: 512
+lambda_kl: 1.0
+lr_adapter: 1.0e-4
+lr_writer: 2.0e-5
+weight_decay: 0.0
+max_grad_norm: 1.0
+warmup_frac: 0.03
+steps: 4000
+effective_batch: 32
+micro_batch: 32
+eval_every: 250
+log_every: 10
+seed: 0

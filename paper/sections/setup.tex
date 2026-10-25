@@ -1,0 +1,66 @@
+\section{Experimental Setup}
+\label{sec:setup}
+% Mapping to docs/VILATENT.md: RQ1 = H1 (4x, 8x, 16x; Long and single), RQ2 = H6, RQ3 = H7.
+
+\subsection{Data and Splits}
+\label{sec:data}
+We use the answerable questions of UIT-ViQuAD~2.0~\cite{nguyen2022vlsp}, extractive QA over Vietnamese Wikipedia passages.
+Its official validation set is our test set (2,653 questions, 557 passages, 19 articles, none in training).
+From the training set we hold out whole articles with at most 200 questions (seed~0): a \emph{gate} split (16 articles, 1,228 questions) used only for the decision rule, and a \emph{select} split (6 articles, 621 questions) used for every choice (checkpoints, BM25 parameters, $f^\ast$, $\tau$).
+The 250 passages of our earlier passage-level dev set are also removed from training.
+The test set is evaluated once, after all choices are fixed.\todo{confirm that the test run happened exactly once}
+
+\textbf{ViQuAD-Long.}
+For every article of gate, select and test we join its distinct passages (exact-text deduplication; no duplicate occurs, and every passage has an answerable question) in the order of the official JSON file, separated by a blank line and without any length limit, and ask each answerable question of the article against the whole article.
+The splits are inherited by article, every gold answer remains in its document, and ViQuAD-Long is used for evaluation only.
+Test articles have 7--91 passages and 1,279/4,470/18,327 reader tokens (min/median/max; gate 1,193/1,778/7,313, select 1,638/4,375/8,428), against a median of about 200 and a maximum of 776 for a single passage.
+In the \emph{single-passage} setting each question is asked against its own passage, as in the original task.
+
+Stage~1 uses one pair $(A, B)$ per document of at least 1,500 characters, half from 146,752 Vietnamese Wikipedia articles~\cite{wikimedia_wiki} and half from 200,000 BKAINewsCorpus articles~\cite{bkai_news}: 96,000 for training and 1,000 for validation.
+Wikipedia articles whose titles match an evaluation article are removed, and every training text that shares a 13-syllable n-gram with an evaluation set we use now or plan to use is dropped, which leaves 15,706 training questions.
+
+\subsection{Reader and Training}
+\label{sec:impl}
+The reader is Qwen3.5-2B~\cite{qwen35}: 24 layers (18 Gated DeltaNet, 6 gated attention), hidden size 2048, used without a system prompt and with thinking disabled.
+The instruction, identical for all methods, asks for a short phrase taken from the passage.\footnote{\textit{``Đọc đoạn văn và trả lời câu hỏi bằng một cụm từ ngắn lấy từ đoạn văn. Chỉ ghi câu trả lời.''} (Read the passage and answer the question with a short phrase taken from the passage. Write only the answer.)}
+Decoding is greedy (reproducible, unlike the sampling the model card recommends), with at most 128 new tokens.
+One stage-1 run (5,000 steps) and one stage-2 run (4,000 steps) give the single multi-rate checkpoint used for every ratio and memory factor.
+We train with AdamW at $10^{-4}$ for the adapter, the scale and the boundary embeddings and $2\cdot10^{-5}$ for the writer layers, without weight decay, with gradient clipping at 1.0, a 3\% linear warm-up followed by linear decay, and an effective batch of 32.
+Every 250 steps the loss of Eq.~\eqref{eq:loss} is measured on the select split, as $0.7$ times its single-passage loss plus $0.3$ times its multi-passage loss, with every example at a fixed $(r, f)$, and the checkpoint with the lowest value is kept.
+The memory factor $f^\ast$ is chosen at inference by select F1, separately for each setting and ratio; select is disjoint by article from gate and test.
+All runs use seed~0; \tbd{} configurations have a second seed.\todo{second seed for ME/M and the prompt control if time permits; update this sentence}
+All reported numbers come from NVIDIA H100 GPUs in bf16 with Hugging Face Transformers; trainable weights are kept in fp32.\todo{GPU hours of stage 1, stage 2 and evaluation}
+
+\subsection{Baselines and Controls}
+\label{sec:baselines}
+Two reference points bound the scores: the full document without a budget, and no document at all.
+\emph{Hard, question-blind:} \textbf{truncation} keeps the first $k$ tokens; \textbf{Lead-$k$} keeps whole sentences from the start while they fit, so part of the budget can stay unused and, on short passages, the context can be empty; \textbf{LLMLingua-2}~\cite{pan2024llmlingua2} uses its released XLM-RoBERTa-large compressor, with the rate binary-searched until the output has between $0.97k$ and $k$ reader tokens.
+\emph{Hard, question-aware:} \textbf{BM25 sentences} is the evidence selector of ViLatent-ME given the whole budget; its $k_1 = \tbd$, $b = \tbd$ were chosen by its own F1 on select single passages at 4$\times$, over $k_1 \in \{0.9, 1.2, 1.5, 2.0\} \times b \in \{0.3, 0.5, 0.75, 1.0\}$, before any ViLatent run (reader in fp16), and are shared with ViLatent-ME.
+The \textbf{PhoBERT selector} is a trained hard compressor: a PhoBERT-base-v2 cross-encoder~\cite{nguyen2020phobert} scores (question, sentence) pairs, segmented with pyvi, and is trained for 2 epochs at $2\cdot10^{-5}$ on the training sentences, labelled positive when they contain a gold answer verbatim (checkpoint by select loss); at inference its scores replace those of BM25 in the same packing.
+Question-blind and question-aware hard baselines are reported separately.
+
+\emph{Soft:} the \textbf{frozen writer} is a LatentPress-style baseline, not a strict reproduction: the copied $L = 4$ layers stay frozen and only $W_a$ (initialised to the identity), $s$ and the boundary embeddings are trained, in the same multi-rate stage~2 without stage~1, and it is read at its own $f^\ast$, chosen like ME's.
+We do not use $L = 2$ as LatentPress does, because the first layers of Qwen3.5 are Gated DeltaNet layers without attention.
+\emph{Controls for answer style:} the \textbf{learned prompt + BM25} replaces the memory with learned vectors that ignore the document, a soft prompt~\cite{lester2021prompt} cut to length: a chunk of $n_i$ tokens receives the first $\lceil n_i/(rf) \rceil$ of 128 learned vectors.
+It keeps the boundary embeddings, the evidence, the $(r, f)$ sampling, the multi-passage mixing, the data, the loss and the steps of ViLatent, starts from embeddings of tokens sampled from training passages, and uses a learning rate of $10^{-3}$.
+ViLatent-ME minus this control is what the memory adds beyond training on answers.
+In the \textbf{swapped-memory} control, applied at evaluation only, ViLatent-ME reads the memory of a document from another article, cut to the same number of vectors, with its own evidence.
+
+\subsection{Metrics, Statistics and Decision Rule}
+\label{sec:stats}
+F1 and exact match (EM) are computed SQuAD-style on lowercased syllables without punctuation, maximised over the gold answers; the answer is the first non-empty line of the output.
+An answer is \emph{unreadable} if it contains a thinking tag or does not end its turn within 128 tokens.
+All comparisons are paired on the same questions.
+95\% confidence intervals come from a bootstrap with 10,000 replicates that resamples \emph{articles}, since questions on one article are not independent and ViQuAD-Long has only 19 test articles; resampling passages is reported as a secondary analysis, and seeds are resampled where two exist.
+One-sided $p$-values come from the bootstrap distribution shifted to the null~\cite{efron1993bootstrap}.
+Calibration of the answer confidence $\exp(\bar\ell)$, with $\bar\ell$ the mean token log-probability, is measured by the expected calibration error (ECE) over 10 equal-width bins, an answer counting as correct when its F1 is at least 0.5.
+\emph{Cost} is measured on one H100 in bf16 with batch size 1: writing time per document $W$ (paid once), BM25 time per question, and the reader's time to first token and end-to-end time per question $t$.
+Writing pays off after $N^\ast = W / (t_{\mathrm{full}} - t_{\mathrm{ME}})$ questions per document; the cascade's expected time weights the time of each stage by the share of questions that reach it.
+
+Before any run we fixed the decision rule, evaluated on the gate split of ViQuAD-Long at 4$\times$ with ViLatent-ME at $f^\ast$ and seed~0.
+ViLatent-ME passes if
+(1)~its F1 exceeds that of the best hard compressor (truncation, Lead-$k$, LLMLingua-2, BM25 or the PhoBERT selector) by at least 3 points with the lower confidence bound above zero,
+(2)~the lower bound of its difference with the learned prompt + BM25 is above zero, and
+(3)~fewer than 2\% of its answers and of the best hard compressor's are unreadable.
+The 3-point margin is the smallest gain we judged worth training a writer for, and is of the order of the 3.9--5.7-point gap between query-aware and query-agnostic compressors trained identically~\cite{sakhno2026adamem}.
+Single passages and the 8$\times$ and 16$\times$ budgets are descriptive analyses.

@@ -47,9 +47,9 @@ Hai việc G2 **không** quyết định:
 ### Dữ liệu
 
 **D1. QA sinh tự động.** Cụm GPU không gọi được endpoint iCOMM, nên chia làm hai nơi:
-`bash scripts/run_g1.sh qa_generate` chạy ở một máy trong mạng iCOMM (chỉ cần CPU và `data/corpus/docs.jsonl`).
+`bash scripts/run_paper.sh qa_generate` chạy ở một máy trong mạng iCOMM (chỉ cần CPU và `data/corpus/docs.jsonl`).
 `qa_raw.jsonl` và file meta được đẩy lên repo dataset private `thanthienhai/vilatent-qa-gen` trên Hugging Face. Trên
-cụm, ngay sau G1 (`docs/RUN_G0_G1.md` mục 5): `HF_TOKEN=<token đọc được repo> bash scripts/run_g1.sh qa_download qa_filter`. `qa_download` tải đúng revision
+cụm, ngay sau G1 (`docs/RUN_PAPER.md` mục 9): `HF_TOKEN=<token đọc được repo> bash scripts/run_paper.sh qa_download qa_filter`. `qa_download` tải đúng revision
 `QA_REVISION` (mặc định `28e3ac26`, bản prompt 3) và dừng nếu SHA-256 không khớp file meta.
 
 Endpoint `http://172.16.9.11:30049/v1` đo ngày 21/10/2026: khoảng 1,85 request/s, bão hoà từ 16 luồng, nên 20.000
@@ -121,7 +121,7 @@ Sau khi lọc:
   logit thầy cũng lấy từ reader không có memory. Không cần gán nhãn.
 - `scripts/make_offcontext.py` ghi `data/offctx/{train,dev}.jsonl`; `scripts/precompute_teacher.py` thêm chế độ
   không có ngữ cảnh.
-- Chạy `leak_filter.py` trên dữ liệu này với mọi tập đánh giá của `run_g1.sh` (`EVAL_FILES`) cộng Vi-MQA.
+- Chạy `leak_filter.py` trên dữ liệu này với mọi tập đánh giá của `run_paper.sh` (`EVAL_FILES`) cộng Vi-MQA.
 
 **D5. MDE.** `scripts/mde_report.py` đọc kết quả từng câu của G1, tính sai số chuẩn của chênh lệch cặp (ViLatent-ME
 trừ mốc cứng tốt nhất) bằng bootstrap theo cụm đoạn, rồi suy ra MDE cho ViQuAD test (2.653 câu / 557 đoạn) và MLQA
@@ -175,10 +175,10 @@ Q10. Việc này phải làm trước C1, C4, C5.
 
 **C7. Pipeline và tài liệu vận hành.**
 
-- `configs/g2/*.yaml` (mục 5), `scripts/run_g2.sh` theo cùng kiểu với `run_g1.sh` (các bước `data`, `teacher`,
+- `configs/g2/*.yaml` (mục 5), `scripts/run_g2.sh` theo cùng kiểu với `run_paper.sh` (các bước `data`, `teacher`,
   `stage1`, `stage2`, `eval`, `report`; lượt độc lập chia qua `GPUS`).
 - `scripts/smoke_g2.sh` có `SMOKE_SHORT=1`, chạy thử trên Kaggle 2× T4 (fp16) trước khi gửi đội vận hành.
-- `docs/RUN_G2.md` theo khung của `docs/RUN_G0_G1.md`.
+- `docs/RUN_G2.md` theo khung của `docs/RUN_PAPER.md`.
 - Test CPU với Qwen3.5 tí hon cho C1, C3, C4, C5 và bộ kiểm tra IFEval.
 
 ## 5. Ma trận thí nghiệm

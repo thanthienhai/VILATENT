@@ -118,11 +118,11 @@ def check_backward(model: ViLatent, n_layers: int, writer_layer_grad: bool = Tru
     model.reader.train()
     model.writer.train()
     model.writer.body.requires_grad_(writer_layer_grad)
-    batch = [model.prepare(Example(f"g0-{i}", "g0", "qa", CONTEXT, question=q, answers=[a], target=a))
+    batch = [model.prepare(Example(f"g0-{i}", "g0", "qa", CONTEXT, question=q, answers=[a], target=a), 4)
              for i, (q, a) in enumerate(QUESTIONS)]
     torch.cuda.reset_peak_memory_stats() if torch.cuda.is_available() else None
     t0 = time.time()
-    memories = model.encode_memory([p.chunks for p in batch])
+    memories = model.encode_memory(batch)
     for m in memories:
         m.retain_grad()
     seqs = [model.memory_prompt(p, m, with_target=True) for p, m in zip(batch, memories)]
@@ -189,7 +189,7 @@ def main():
     reader, tokenizer, info = load_reader(args.reader, dtype=args.dtype, quant=args.quant,
                                           return_loading_info=True)
     template = ReaderTemplate(load_reader_config(args.reader_config), tokenizer)
-    writer = MemoryWriter(reader, tokenizer, n_layers=args.n_layers, ratio=4)
+    writer = MemoryWriter(reader, tokenizer, n_layers=args.n_layers)
     model = ViLatent(reader, tokenizer, template, writer)
     prompts = [template.text_prompt("qa", CONTEXT, q) for q, _ in QUESTIONS]
     context_ids = template.context_ids("qa", CONTEXT)

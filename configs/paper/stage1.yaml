@@ -1,15 +1,16 @@
-# G1, stage 1 (O-LM, shortened), writer at 4×: used by ViLatent-M and W5 at 4×.
-# docs/VILATENT.md §Cổng quyết định: 2,000–3,000 steps before the ViQuAD fine-tuning.
+# Paper (ACIIDS 2027), stage 1 (O-LM): ONE multi-rate writer (checklist A4, B8). Every pair gets its
+# pooling ratio ρ drawn from {4, 8, 16, 32}; the adapter W and the scale s are shared by all ratios.
+# 5,000 steps (decision of 25/10/2026; G1 ran 2,500 steps per ratio).
 reader: Qwen/Qwen3.5-2B
 reader_config: configs/readers/qwen3.5-2b.json
 task: continue
-mode: M
 train: data/stage1/pairs_train.jsonl
 dev: data/stage1/pairs_dev.jsonl
 teacher_train: data/teacher/qwen3.5-2b/pairs_train.pt
 teacher_dev: data/teacher/qwen3.5-2b/pairs_dev.pt
-out_dir: runs/g1_stage1_r4
-ratio: 4
+out_dir: runs/paper/stage1
+ratios: [4, 8, 16, 32]
+memory_factors: [1]
 n_layers: 4
 lora_rank: 0
 chunk_tokens: 512
@@ -19,9 +20,9 @@ lr_writer: 2.0e-5
 weight_decay: 0.0
 max_grad_norm: 1.0
 warmup_frac: 0.03
-steps: 2500
+steps: 5000
 effective_batch: 32
-micro_batch: 32  # effective_batch 32 in one pass: peak ~10.5 GB at 8 on H100 (smoke 22/10/2026)
+micro_batch: 32  # one pass per step; peak ~10.5 GB at micro-batch 8 on H100 (smoke 22/10/2026)
 eval_every: 250
 log_every: 10
 seed: 0

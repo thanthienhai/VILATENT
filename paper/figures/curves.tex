@@ -1,0 +1,25 @@
+% Figures 2 and 3, side by side. Placeholders until the test run exists; the boxes keep the final
+% size so the page count stays realistic. Plan: pgfplots.
+%   Fig. 2 (crossover, checklist A16): x = budget ratio 4/8/16, y = test F1 on ViQuAD-Long; lines for
+%     BM25, PhoBERT selector, ViLatent-M, ViLatent-ME (f* per ratio) and learned prompt + BM25.
+%     Data: results/paper/test/long/<method>_r{4,8,16}.summary.json; f* from results/paper/select/choices.json.
+%   Fig. 3 (fallback, A19): x = mean reader tokens per question, y = test F1 on ViQuAD-Long at 4x; two curves
+%     over tau: log-prob-only fallback (ME -> full) and AiE + cascade; points for full, ME, BM25, truncation;
+%     the select-chosen tau marked. Data: results/paper/test/long/cascade_curve_r4.json.
+\begin{figure}[t]
+\centering
+\begin{minipage}[t]{0.485\textwidth}
+\centering
+\fbox{\parbox[c][34mm][c]{0.92\textwidth}{\centering\footnotesize\color{red}
+Placeholder: test F1 on ViQuAD-Long against the ratio (4$\times$, 8$\times$, 16$\times$) for BM25, PhoBERT, ViLatent-M, ViLatent-ME ($f^\ast$) and learned prompt + BM25.}}
+\caption{Test F1 against the ratio, ViQuAD-Long.}
+\label{fig:crossover}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\textwidth}
+\centering
+\fbox{\parbox[c][34mm][c]{0.92\textwidth}{\centering\footnotesize\color{red}
+Placeholder: test F1 against mean reader tokens per question; log-prob-only fallback and AiE + cascade as $\tau$ varies; full, ME, BM25, truncation as points; select-chosen $\tau$ marked.}}
+\caption{Fallbacks at 4$\times$, ViQuAD-Long test.}
+\label{fig:fallback}
+\end{minipage}
+\end{figure}

@@ -52,7 +52,10 @@ def test_bm25_baseline_needs_its_tuned_parameters(tmp_path):
     path.write_text('{"k1": 0.9, "b": 0.3, "grid": []}', encoding="utf-8")
     params = load_bm25_params(path)
     selector = build_baseline("bm25", bm25=params)
-    assert params == {"k1": 0.9, "b": 0.3} and (selector.k1, selector.b) == (0.9, 0.3)
+    # a file without units was tuned on syllables (G1); the paper re-tunes on pyvi words
+    assert params == {"k1": 0.9, "b": 0.3, "units": "syllable"} and (selector.k1, selector.b) == (0.9, 0.3)
+    path.write_text('{"k1": 1.2, "b": 0.5, "units": "word"}', encoding="utf-8")
+    assert build_baseline("bm25", bm25=load_bm25_params(path)).units == "word"
 
 
 def test_one_sided_p_value_is_centred_on_the_null():

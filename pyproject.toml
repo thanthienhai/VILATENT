@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "ViLatent: soft context compression for frozen Vietnamese readers (research code)"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "tqdm", "pyyaml"]
+# pyvi: Vietnamese word segmentation for BM25 and the PhoBERT selector (revision of 25/10/2026)
+dependencies = ["numpy>=1.24", "tqdm", "pyyaml", "pyvi==0.1.1"]
 
 [project.optional-dependencies]
 # Writer, reader and training. Qwen3.5 needs a recent transformers (model type qwen3_5).

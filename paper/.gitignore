@@ -1,0 +1,9 @@
+# LaTeX build output (main.pdf included: rebuild it from the sources)
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+main.pdf

@@ -7,10 +7,14 @@ by ``budget.context_budget`` (the number of memory vectors of ViLatent at the sa
   lead         keep whole sentences from the start while they fit; never cut a sentence, so
                part of the budget may stay unused (reported as tokens actually used)
   bm25         rank sentences by BM25 against the question, keep the best that fit (only those
-               sharing a syllable with the question, score > 0), fill the rest of the budget
+               sharing a term with the question, score > 0), fill the rest of the budget
                with the head of the best sentence that did not fit (cut at a reader token),
-               restore the original order. k1 and b come from configs/bm25.json, tuned on
-               ViQuAD select before G1 (scripts/tune_bm25.py); ViLatent-ME uses the same values
+               restore the original order. Terms are pyvi words, lowercased, with the question
+               words removed from the query (revision of 25/10/2026; G1 used syllables). k1 and b
+               come from configs/bm25.json, tuned on ViQuAD select (scripts/tune_bm25.py);
+               ViLatent-ME uses the same values
+  phobert      the same packing, sentences ranked by a trained PhoBERT cross-encoder
+               ("the sentence contains the answer", vilatent.selector)
   llmlingua2   LLMLingua-2 (xlm-roberta-large), its ``rate`` binary-searched to land in
                [0.97·k, k] reader tokens
   full, none   full context and no context (upper and lower references, no budget)
@@ -22,7 +26,7 @@ import math
 from collections import Counter
 from pathlib import Path
 
-from .text import split_sentences, syllables
+from .text import query_words, split_sentences, syllables, words
 
 
 class TokenCounter:
@@ -31,6 +35,7 @@ class TokenCounter:
 
     def __init__(self, tokenizer, lead: str = ""):
         self.tokenizer, self.lead = tokenizer, lead
+        self._short = {}  # counts of short texts (sentences), reused across questions and budgets
 
     def _slot(self, text: str) -> str:
         return self.lead + text if text else ""
@@ -42,7 +47,12 @@ class TokenCounter:
         return [(max(0, a - n), max(0, b - n)) for a, b in enc["offset_mapping"]]
 
     def count(self, text: str) -> int:
-        return len(self.tokenizer(self._slot(text), add_special_tokens=False)["input_ids"])
+        if len(text) <= 2000 and text in self._short:
+            return self._short[text]
+        n = len(self.tokenizer(self._slot(text), add_special_tokens=False)["input_ids"])
+        if len(text) <= 2000 and len(self._short) < 1_000_000:
+            self._short[text] = n
+        return n
 
 
 def fit_head(text: str, budget: int, counter: TokenCounter) -> str:
@@ -98,13 +108,25 @@ class LeadSentences:
         return " ".join(kept)
 
 
-def bm25_scores(query: str, documents: list[str], k1: float = 1.5, b: float = 0.75) -> list[float]:
-    """Okapi BM25 on lowercased syllables; IDF over ``documents`` (the sentences of one context)."""
-    docs = [syllables(d) for d in documents]
+def bm25_terms(text: str, units: str = "word", query: bool = False) -> list[str]:
+    """BM25 terms: pyvi words (``units="word"``; question words removed from a query) or lowercased
+    syllables (``"syllable"``, the G1 version, kept to measure the change)."""
+    if units == "word":
+        return query_words(text) if query else words(text)
+    if units == "syllable":
+        return syllables(text)
+    raise ValueError(f"unknown BM25 units {units!r}")
+
+
+def bm25_scores(query: str, documents: list[str], k1: float = 1.5, b: float = 0.75,
+                units: str = "word") -> list[float]:
+    """Okapi BM25 of ``query`` against ``documents`` (the sentences of one context, which also give
+    the IDF)."""
+    docs = [bm25_terms(d, units) for d in documents]
     n = len(docs)
     avg_len = sum(len(d) for d in docs) / max(n, 1) or 1.0
     df = Counter(t for d in docs for t in set(d))
-    q_terms = set(syllables(query))
+    q_terms = set(bm25_terms(query, units, query=True))
     scores = []
     for d in docs:
         tf = Counter(d)
@@ -117,58 +139,101 @@ def bm25_scores(query: str, documents: list[str], k1: float = 1.5, b: float = 0.
     return scores
 
 
-def load_bm25_params(path: str | Path) -> dict[str, float]:
-    """``{"k1", "b"}`` of a configs/bm25.json written by scripts/tune_bm25.py."""
+def load_bm25_params(path: str | Path) -> dict:
+    """``{"k1", "b", "units"}`` of a configs/bm25.json written by scripts/tune_bm25.py (a file
+    without ``units`` was tuned on syllables)."""
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
-    return {"k1": float(cfg["k1"]), "b": float(cfg["b"])}
+    return {"k1": float(cfg["k1"]), "b": float(cfg["b"]), "units": cfg.get("units", "syllable")}
+
+
+def pack_sentences(sentences: list[str], scores: list[float], budget: int, counter: TokenCounter,
+                   positive_only: bool) -> str:
+    """Keep the best-scored sentences that fit whole (only those with score > 0 when
+    ``positive_only``), fill the rest of the budget with the head of the best sentence that did
+    not fit, cut at a reader-token end, and restore the original order.
+
+    Sentences are packed with their own token counts (each sits after one space, the slot lead
+    or the joining space), so long contexts (ViQuAD-Long) are not re-tokenized for every
+    candidate; the joined text is then counted exactly and the lowest-ranked kept sentences are
+    dropped in the rare case where tokens merge across a join."""
+    if not sentences or budget <= 0:
+        return ""
+    order = sorted(range(len(sentences)), key=lambda i: (-scores[i], i))
+    rank = {i: r for r, i in enumerate(order)}
+
+    def render(keep: set[int], partial: tuple[int, str] | None = None) -> str:
+        parts = []
+        for i, s in enumerate(sentences):
+            if i in keep:
+                parts.append(s)
+            elif partial is not None and i == partial[0] and partial[1]:
+                parts.append(partial[1])
+        return " ".join(parts)
+
+    # sentences sharing no term with the question (score 0) are never packed whole when
+    # positive_only: they would take the budget from the head of the best sentence that does not fit
+    keep, used, best_rest = set(), 0, None
+    for i in order:
+        cost = counter.count(sentences[i])
+        if (scores[i] > 0 or not positive_only) and used + cost <= budget:
+            keep.add(i)
+            used += cost
+        elif best_rest is None:
+            best_rest = i
+    for i in sorted(keep, key=lambda i: -rank[i]):
+        if counter.count(render(keep)) <= budget:
+            break
+        keep.discard(i)
+        best_rest = i if best_rest is None or rank[i] < rank[best_rest] else best_rest
+    if best_rest is None:
+        return render(keep)
+    # fill: longest head of the best non-fitting sentence, cut at a reader token end (as
+    # truncation), that keeps the total within budget; a whole word such as "1010," may be
+    # several tokens, so cutting at words would leave budget unused
+    sentence = sentences[best_rest]
+    heads = [""] + [sentence[:end].rstrip() for _, end in counter.offsets(sentence)]
+    low, high = 0, len(heads) - 1
+    while low < high:
+        mid = (low + high + 1) // 2
+        if counter.count(render(keep, (best_rest, heads[mid]))) <= budget:
+            low = mid
+        else:
+            high = mid - 1
+    return render(keep, (best_rest, heads[low]))
 
 
 class BM25Sentences:
     name = "bm25"
 
-    def __init__(self, k1: float = 1.5, b: float = 0.75):
-        self.k1, self.b = k1, b
+    def __init__(self, k1: float = 1.5, b: float = 0.75, units: str = "word"):
+        self.k1, self.b, self.units = k1, b, units
 
     def compress(self, context, question, budget, counter):
         sentences = _sentences(context)
-        if not sentences:
-            return ""
-        scores = bm25_scores(question, sentences, self.k1, self.b)
-        order = sorted(range(len(sentences)), key=lambda i: (-scores[i], i))
+        scores = bm25_scores(question, sentences, self.k1, self.b, self.units)
+        return pack_sentences(sentences, scores, budget, counter, positive_only=True)
 
-        def render(keep: set[int], partial: tuple[int, str] | None = None) -> str:
-            parts = []
-            for i, s in enumerate(sentences):
-                if i in keep:
-                    parts.append(s)
-                elif partial is not None and i == partial[0] and partial[1]:
-                    parts.append(partial[1])
-            return " ".join(parts)
 
-        # sentences sharing no syllable with the question (score 0) are never packed whole: they
-        # would take the budget from the head of the best sentence that does not fit
-        keep, best_rest = set(), None
-        for i in order:
-            if scores[i] > 0 and counter.count(render(keep | {i})) <= budget:
-                keep.add(i)
-            elif best_rest is None:
-                best_rest = i
-        if best_rest is None:
-            return render(keep)
-        # fill: longest head of the best non-fitting sentence, cut at a reader token end (as
-        # truncation), that keeps the total within budget; a whole word such as "1010," may be
-        # several tokens, so cutting at words would leave budget unused
-        sentence = sentences[best_rest]
-        heads = [""] + [sentence[:end].rstrip() for _, end in counter.offsets(sentence)]
-        low, high = 0, len(heads) - 1
-        while low < high:
-            mid = (low + high + 1) // 2
-            if counter.count(render(keep, (best_rest, heads[mid]))) <= budget:
-                low = mid
-            else:
-                high = mid - 1
-        return render(keep, (best_rest, heads[low]))
+class PhoBERTSentences:
+    """Trained hard compressor (revision of 25/10/2026): a PhoBERT cross-encoder scores every
+    (question, sentence) pair for "the sentence contains the answer" (vilatent.selector); the
+    sentences are packed like BM25's, without the score > 0 rule. Scores do not depend on the
+    budget, so they are cached per (context, question) and reused across ratios."""
+    name = "phobert"
+
+    def __init__(self, model_dir: str, device: str = "cuda"):
+        from .selector import SentenceScorer
+
+        self.scorer = SentenceScorer.load(model_dir, device)
+        self.cache = {}
+
+    def compress(self, context, question, budget, counter):
+        sentences = _sentences(context)
+        key = (context, question)
+        if key not in self.cache:
+            self.cache[key] = self.scorer.score(question, sentences)
+        return pack_sentences(sentences, self.cache[key], budget, counter, positive_only=False)
 
 
 class LLMLingua2:
@@ -198,8 +263,13 @@ class LLMLingua2:
         return best
 
 
-def build_baseline(name: str, device: str = "cuda", bm25: dict | None = None):
-    """``bm25``: the tuned ``{"k1", "b"}`` (load_bm25_params), required for the bm25 baseline."""
+def build_baseline(name: str, device: str | None = None, bm25: dict | None = None, selector: str | None = None):
+    """``bm25``: the tuned ``{"k1", "b", "units"}`` (load_bm25_params), required for the bm25
+    baseline; ``selector``: the trained PhoBERT selector directory, required for phobert."""
+    if device is None:
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     simple = {"full": Full, "none": NoContext, "truncation": Truncation, "lead": LeadSentences}
     if name in simple:
         return simple[name]()
@@ -207,6 +277,10 @@ def build_baseline(name: str, device: str = "cuda", bm25: dict | None = None):
         if bm25 is None:
             raise ValueError("the bm25 baseline needs its tuned parameters (configs/bm25.json)")
         return BM25Sentences(**bm25)
+    if name == "phobert":
+        if selector is None:
+            raise ValueError("the phobert baseline needs a trained selector (scripts/train_selector.py)")
+        return PhoBERTSentences(selector, device)
     if name == "llmlingua2":
         return LLMLingua2(device)
     raise ValueError(f"unknown baseline {name!r}")

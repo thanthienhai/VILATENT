@@ -2,7 +2,8 @@
 
 Every task is a JSONL file with one example per line:
 
-  qa        {id, cluster, context, question, answers, [title], [answer_type], [source]}
+  qa        {id, cluster, context, question, answers, [title], [answer_type], [source],
+             [passage_index, n_passages, position]}   the last three on ViQuAD-Long and multi-passage rows
   continue  {id, cluster, context, target, [source], [title]}   stage-1 pairs: context = A, target = B
 
 ``cluster`` is the source passage (QA) or document (stage 1). Several questions share one
@@ -52,6 +53,10 @@ def write_jsonl(path: str | Path, rows) -> int:
     return n
 
 
+# optional QA fields carried into the evaluation rows
+QA_EXTRA = ("title", "answer_type", "source", "passage_index", "n_passages", "position")
+
+
 def load_examples(path: str | Path, task: str, limit: int | None = None) -> list[Example]:
     out = []
     for r in read_jsonl(path)[:limit]:
@@ -59,7 +64,7 @@ def load_examples(path: str | Path, task: str, limit: int | None = None) -> list
             answers = list(r["answers"])
             out.append(Example(r["id"], r["cluster"], "qa", r["context"], question=r["question"],
                                answers=answers, target=answers[0],
-                               extra={k: r[k] for k in ("title", "answer_type", "source") if k in r}))
+                               extra={k: r[k] for k in QA_EXTRA if k in r}))
         elif task == "continue":
             out.append(Example(r["id"], r["cluster"], "continue", r["context"], target=r["target"],
                                extra={k: r[k] for k in ("title", "source") if k in r}))
@@ -110,6 +115,68 @@ def split_viquad_train(rows: list[dict], n_viwordc_passages: int = 250, gate_que
               "select": [r for r in rows if r["title"] in select],
               "viwordc_dev": [r for r in rows if r["cluster"] in viwordc]}
     return splits, held
+
+
+# ---------------------------------------------------------------------------- long contexts
+
+PASSAGE_SEPARATOR = "\n\n"  # a newline always ends a sentence (text.split_sentences), so chunks never span passages
+
+
+def paragraph_key(row: dict) -> tuple:
+    """Position of a ViQuAD row's passage in the official JSON file: ids are
+    ``viquad-<article>-<paragraph>-<question>``, numbered in file order."""
+    return tuple(int(x) for x in row["id"].split("-")[1:3])
+
+
+def article_passages(rows: list[dict]) -> dict[str, list[str]]:
+    """Distinct passages of every article (``title``), in JSON order. Duplicates are removed by
+    exact text (none occur in ViQuAD 2.0 train or validation)."""
+    order = {}
+    for r in rows:
+        order.setdefault(r["title"], {}).setdefault(r["context"], paragraph_key(r))
+    return {t: sorted(ps, key=ps.get) for t, ps in order.items()}
+
+
+def position_bin(index: int, n_passages: int) -> str:
+    """Third of the article that holds a passage: beginning, middle or end (checklist A25)."""
+    x = (index + 0.5) / n_passages
+    return "beginning" if x < 1 / 3 else ("middle" if x < 2 / 3 else "end")
+
+
+def long_rows(rows: list[dict], passages: dict[str, list[str]]) -> list[dict]:
+    """ViQuAD-Long (revision of 25/10/2026): every question reads the whole article, i.e. all its
+    passages in JSON order joined by a blank line, with no length limit. ``cluster`` stays the
+    question's own passage and ``title`` the article; ``passage_index`` / ``n_passages`` locate
+    the passage. The memory of an article is written once and shared by all its questions."""
+    out = []
+    for r in rows:
+        ps = passages[r["title"]]
+        i = ps.index(r["context"])
+        out.append({**r, "context": PASSAGE_SEPARATOR.join(ps), "passage_index": i, "n_passages": len(ps),
+                    "position": position_bin(i, len(ps))})
+    return out
+
+
+def multi_passage_rows(rows: list[dict], seed: int = 0, min_passages: int = 2,
+                       max_passages: int = 8) -> list[dict]:
+    """Multi-passage training samples (checklist A22): for every question of an article with at
+    least ``min_passages`` passages in ``rows``, a contiguous window of n ~ U{min, max} passages
+    (at most the article's count) of that article, in JSON order, that contains the question's
+    passage at a uniformly drawn offset. Only passages present in ``rows`` are used, so a
+    leak-filtered training file stays clean. Ids get a "multi-" prefix."""
+    rng = random.Random(seed)
+    passages = article_passages(rows)
+    out = []
+    for r in rows:
+        ps = passages[r["title"]]
+        if len(ps) < min_passages:
+            continue
+        n = rng.randint(min_passages, min(max_passages, len(ps)))
+        g = ps.index(r["context"])
+        start = rng.randint(max(0, g - n + 1), min(g, len(ps) - n))
+        out.append({**r, "id": f"multi-{r['id']}", "context": PASSAGE_SEPARATOR.join(ps[start:start + n]),
+                    "passage_index": g - start, "n_passages": n})
+    return out
 
 
 # ---------------------------------------------------------------------------- provenance

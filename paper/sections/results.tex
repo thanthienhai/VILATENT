@@ -1,0 +1,109 @@
+\section{Results}
+\label{sec:results}
+% Every number here comes from results/paper/{select,gate,test}/{long,single} (README.md, "Where the
+% numbers come from"). Fill the \tbd cells from the per-question JSONL files and the reports, never by
+% hand-copying the console log; one decimal in the tables.
+
+\subsection{Soft Versus Hard Compression at Equal Budget (RQ1)}
+\label{sec:rq1}
+
+\begin{table}[t]
+\caption{QA at a 4$\times$ budget with Qwen3.5-2B. ViQuAD-Long unless marked Single. $\Delta$: test F1 minus that of the best hard compressor, with a 95\% article-bootstrap CI. Unread.: unreadable answers on test. ViLatent-ME and the soft baselines use $f^\ast = \tbd$, chosen on select.}
+\label{tab:main}
+\centering\footnotesize
+\setlength{\tabcolsep}{2.6pt}
+\newcommand{\grp}[1]{\multicolumn{7}{@{}l}{\emph{#1}} \\}
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+Method & \shortstack{Gate\\F1} & \shortstack{Test\\F1} & \shortstack{Test\\EM} & $\Delta$ F1 [95\% CI] & \shortstack{Unread.\\\%} & \shortstack{Single\\test F1} \\
+\midrule
+\grp{Reference points}
+\quad Full document & \tbd & \tbd & \tbd & -- & \tbd & \tbd \\
+\quad No document & \tbd & \tbd & \tbd & -- & \tbd & \tbd \\
+\grp{Hard, question-blind}
+\quad Truncation & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\quad Lead-$k$ & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\quad LLMLingua-2 & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\grp{Hard, question-aware}
+\quad BM25 sentences & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\quad PhoBERT selector & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\grp{Soft baseline and controls}
+\quad Frozen writer (ME) & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\quad Learned prompt + BM25 & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\quad ME, swapped memory & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\grp{ViLatent}
+\quad ViLatent-M & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\quad ViLatent-Q (sees $q$) & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\quad ViLatent-ME & \tbd & \tbd & \tbd & \tbd{} [\tbd, \tbd] & \tbd & \tbd \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\input{figures/curves}
+
+On ViQuAD-Long at 4$\times$, ViLatent-ME reaches \tbd{} test F1 against \tbd{} for the best hard compressor, \tbd{} (difference \tbd{}, 95\% CI [\tbd, \tbd]), and \tbd{} for the learned prompt + BM25 (difference \tbd{}, 95\% CI [\tbd, \tbd]; Table~\ref{tab:main}).
+On the gate split the pre-specified rule \tbd{} (conditions 1--3: \tbd, \tbd, \tbd); resampling passages instead of articles gives the interval [\tbd, \tbd].
+With the full article the reader reaches \tbd{} F1 and \tbd{} without it.
+On single passages, where the 4$\times$ budget is only about 50 tokens, ViLatent-ME reaches \tbd{} against \tbd{} for the best hard compressor.
+% Outcome A (rule passes): stress that the gain survives the controls and holds on test.
+% Outcome B (rule fails): report which condition failed; if ME ~ prompt + BM25, the gain over the
+% zero-shot baselines is answer style, not compression. Rewrite the abstract and the conclusion accordingly.
+
+Figure~\ref{fig:crossover} answers when memory is worth more than text.
+From 4$\times$ to 16$\times$, BM25 loses \tbd{} F1 and ViLatent-ME \tbd{}; the two curves \tbd{} at \tbd$\times$.\todo{write the crossover sentence from the figure}
+By position of the answer's passage in the article, ViLatent-ME scores \tbd/\tbd/\tbd{} F1 on the first, middle and last third (955, 873 and 825 test questions), against \tbd/\tbd/\tbd{} for BM25 and \tbd/\tbd/\tbd{} with the full article.
+
+\subsection{How the Budget Is Shared}
+\label{sec:share}
+In Table~\ref{tab:factor}, a larger $f$ gives verbatim text more of the budget, but even the full BM25 budget leaves the answer out of the evidence for \tbd\% of the ViQuAD-Long select questions; these misses are what the memory and the cascade must cover.
+Swapping the memory for that of another article costs \tbd{} F1 at $f^\ast$, so the reader \tbd{} uses the memory content.
+
+\begin{table}[t]
+\caption{Memory factor $f$ of ViLatent-ME at a 4$\times$ budget on ViQuAD-Long: a single checkpoint, varying only $f$ at inference ($f = 1$ is ViLatent-M). Text share: mean fraction of the budget held by evidence; Ans.\ in $E$: questions whose gold answer is verbatim in the evidence (select).}
+\label{tab:factor}
+\centering\small
+\begin{tabular}{@{}ccccccc@{}}
+\toprule
+$f$ & $\rho$ & \shortstack{Text\\share} & \shortstack{Ans.\\in $E$} & \shortstack{Select\\F1} & \shortstack{Gate\\F1} & \shortstack{Gate F1,\\swapped} \\
+\midrule
+1 & 4 & 0 & 0 & \tbd & \tbd & \tbd \\
+2 & 8 & \tbd & \tbd & \tbd & \tbd & \tbd \\
+4 & 16 & \tbd & \tbd & \tbd & \tbd & \tbd \\
+8 & 32 & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{The Cost of Query-Blind Writing (RQ2)}
+\label{sec:rq2}
+At 4$\times$ on ViQuAD-Long, writing without the question costs \tbd{} test F1 (95\% CI [\tbd, \tbd]): ViLatent-Q reaches \tbd{} against \tbd{} for the otherwise identical ViLatent-M, while ViLatent-ME, still query-blind when writing, reaches \tbd{}; on single passages the gap is \tbd.% If ViLatent-Q is cut (B17), RQ2 becomes ViLatent-M against ViLatent-ME: what question-selected evidence
+% recovers for a query-blind memory.
+
+\subsection{Re-Reading When Unsure (RQ3)}
+\label{sec:rq3}
+With $\tau$ fixed on select, the cascade keeps \tbd\% of full-context F1 on ViQuAD-Long test at \tbd{} reader tokens per question, against \tbd{} for the full article: \tbd\% of the questions stop at the ME stage, \tbd\% at BM25 and \tbd\% read the full article.
+Figure~\ref{fig:fallback} compares it with the log-probability-only fallback (ME, then the full article), which needs \tbd{} tokens for the same F1.
+The confidence alone is \tbd{} calibrated (ECE \tbd{} for ME, \tbd{} for the full article), which is why the answer-in-evidence check helps; \tbd\% of the test questions are still answered wrongly (F1 $< 0.5$) and accepted.
+
+\subsection{End-to-End Cost}
+\label{sec:cost}
+Table~\ref{tab:cost} adds the writer to the cost.
+On ViQuAD-Long, writing an article takes \tbd{} ms, and ViLatent-ME is cheaper than reading the full article from the \tbd-th question on; ViQuAD articles have \tbd{} questions on average.
+
+\begin{table}[t]
+\caption{Latency on ViQuAD-Long test at 4$\times$ (one H100, bf16, batch 1, mean over \tbd{} articles). $W$: writing or compression per document, paid once; select: BM25 or selector per question; $t$: end-to-end time per question; $N^\ast$: questions per document after which the method is cheaper than the full article.}
+\label{tab:cost}
+\centering\small
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Method & $W$ (ms) & Select (ms) & TTFT (ms) & $t$ (ms) & $N^\ast$ \\
+\midrule
+Full document & -- & -- & \tbd & \tbd & -- \\
+BM25 sentences & -- & \tbd & \tbd & \tbd & -- \\
+PhoBERT selector & -- & \tbd & \tbd & \tbd & -- \\
+LLMLingua-2 & \tbd & -- & \tbd & \tbd & \tbd \\
+ViLatent-ME & \tbd & \tbd & \tbd & \tbd & \tbd \\
+ViLatent-MEF (cascade) & \tbd & \tbd & -- & \tbd & \tbd \\
+\bottomrule
+\end{tabular}
+\end{table}

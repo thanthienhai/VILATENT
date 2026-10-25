@@ -1,0 +1,19 @@
+\section{Limitations}
+\label{sec:limits}
+The study covers one reader (Qwen3.5-2B) and one task, extractive QA over Wikipedia.
+One multi-rate writer serves every ratio; a writer trained for a single ratio might do better at that ratio, and we did not train one.
+Most configurations have a single seed.
+ViQuAD-Long joins the passages of the dataset, not full Wikipedia articles, and has only 19 test articles, so its confidence intervals are wide.
+Syllable-level F1 penalises correct paraphrases, which a soft reader may produce more often, and decoding is greedy rather than sampled.
+Without a comparison with English, the results cannot be attributed to the language itself.
+The writer is tied to one reader and its embedding layer, and its memory cannot be inspected by a human.
+The cascade only reduces risk: wrong answers that are found in the evidence with high confidence are accepted.
+
+\section{Conclusion}
+\label{sec:conclusion}
+We asked when a soft memory is worth more than text under the same reader-token budget, with ViLatent, which writes a document's memory once, without the question, with one writer for every ratio, and reads it together with question-selected sentences.
+% Filled from results/ after the test run. Outcome B (rule fails): state plainly what the controls show,
+% e.g. that the gain over the zero-shot baselines is answer style.
+On ViQuAD-Long at 4$\times$, ViLatent-ME differs from the best hard compressor by \tbd{} test F1, the controls attribute \tbd{} of this to the memory content, and the advantage of memory \tbd{} as the budget tightens (RQ1).
+Writing without the question costs \tbd{} F1 (RQ2), and the cascade keeps 95\% of full-context F1 at \tbd{} reader tokens per question (RQ3).
+Future work will try a query-dependent readout of the memory, as in Memorilla~\cite{fallahpour2026memorilla}, attention pooling instead of mean pooling, the Qwen3.5-9B reader, and a comparison with English on parallel data.

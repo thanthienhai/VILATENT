@@ -25,6 +25,33 @@
 > - ME ở f* chạy thêm seed 1; cổng gộp hai seed. Điều kiện "không đọc được < 2%" chỉ ràng ME và mốc cứng tốt nhất.
 > - Corpus giai đoạn 1, ViQuAD train và QA sinh được lọc thêm theo MLQA-vi, Belebele-vi và VietNews.
 > - p-value một phía của bootstrap tính trên phân phối dời về giả thuyết không.
+>
+> **Sửa đổi 23/10/2026 (bài nộp ACIIDS 2027, thư mục `paper/`):** ViQuAD test được đọc đúng một lần, sau báo cáo G1
+> và khi mọi lựa chọn đã chốt trên select, để làm bảng chính của bài. Cổng G1 vẫn chỉ dùng tập gate. Bài chỉ gồm H1
+> (ở 4×), H6, H7 và phần phân tầng theo loại đáp án của H4.
+>
+> **Sửa đổi 25/10/2026 (checklist `vilatent_method_experiment_revision_checklist_aciids_2027.md`, chưa đồng bộ sang
+> các mục bên dưới, vốn vẫn mô tả G1):** trọng tâm của bài chuyển thành "khi nào memory mềm đáng hơn văn bản cùng
+> ngân sách". Mã và `docs/RUN_PAPER.md` đã theo bản này; luồng `run_g1.sh` bị thay bằng `run_paper.sh`.
+>
+> - **Bộ ghi đa tỉ lệ:** trạng thái ẩn không phụ thuộc ρ, nên một lượt giai đoạn 1 (5.000 bước) bốc ρ ∈ {4, 8, 16, 32}
+>   cho từng mẫu; W và s dùng chung. Một lượt giai đoạn 2 (4.000 bước) cho cả M (f = 1) và ME: mỗi mẫu bốc
+>   r ∈ {4, 8, 16}, f ∈ {1, 2, 4, 8} với r·f ≤ 32. f* chọn lúc suy luận theo F1 trên select, riêng cho từng thiết lập
+>   và từng r (thay cho chọn theo loss). Logit thầy tính một lần.
+> - **ViQuAD-Long:** mỗi bài của gate, select, test được nối đủ mọi đoạn theo thứ tự file JSON, không giới hạn độ dài;
+>   chỉ dùng để đánh giá. Test: 19 bài, 1.279–18.327 token (trung vị 4.470). Thiết lập chính là ViQuAD-Long ở 4×;
+>   đoạn đơn và 8×/16× chỉ mô tả. Giai đoạn 2 trộn khoảng 30% mẫu nhiều đoạn (cửa sổ 2–8 đoạn liền nhau của một bài
+>   train).
+> - **BM25** tính trên từ tách bằng pyvi, bỏ từ để hỏi khỏi truy vấn, k1 và b dò lại trên select; mốc BM25 dùng cùng
+>   cách. Thêm mốc **bộ chọn câu PhoBERT** (có huấn luyện, tính vào "mốc cứng tốt nhất") và **bộ ghi đóng băng** L = 4
+>   kiểu LatentPress (chỉ huấn luyện adapter, s và embedding biên; không dùng L = 2 vì các lớp đầu của Qwen3.5 là
+>   DeltaNet, không có attention). Đối chứng prompt học được: một lượt, lr 1e-3.
+> - **MEF thành dự phòng ba tầng:** ME; nếu đáp án không nằm nguyên văn trong câu gốc hoặc log-prob < τ thì đọc BM25
+>   với ngân sách 2k; nếu vẫn không đạt thì đọc toàn văn. Một τ, chọn trên select. Báo cáo kèm ECE, độ trễ đầu cuối
+>   (bộ ghi + BM25 + reader) và điểm hoà vốn theo số câu hỏi mỗi tài liệu.
+> - **W5 (ViLatent-Q)** chỉ chạy ở r = 4, vai trò chẩn đoán.
+> - **Quy tắc quyết định** thay G1: trên gate, ViQuAD-Long ở 4×, ME ở f* seed 0, giữ ba điều kiện; bootstrap theo bài
+>   là chính, theo đoạn là phụ.
 
 ## Tóm tắt và động cơ
 

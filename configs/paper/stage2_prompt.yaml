@@ -1,0 +1,33 @@
+# Paper, stage 2, control "learned prompt + BM25" (checklist B10): the same sampling of (r, f), data,
+# multi-passage share, loss and steps as stage2_mem, but the memory is a table of ceil(512 / 4) = 128
+# learned vectors that ignore the context (vilatent.writer.PromptWriter), trained from scratch. One run at
+# lr 1e-3 (decision of 25/10/2026). It is read at the f* of ME.
+reader: Qwen/Qwen3.5-2B
+reader_config: configs/readers/qwen3.5-2b.json
+task: qa
+train: data/tasks/viquad_train_clean.jsonl
+train_multi: data/tasks/viquad_train_multi.jsonl
+dev: data/tasks/viquad_select.jsonl
+dev_multi: data/tasks/viquad_select_multi.jsonl
+teacher_train: data/teacher/qwen3.5-2b/viquad_train.pt
+teacher_train_multi: data/teacher/qwen3.5-2b/viquad_train_multi.pt
+teacher_dev: data/teacher/qwen3.5-2b/viquad_select.pt
+teacher_dev_multi: data/teacher/qwen3.5-2b/viquad_select_multi.pt
+multi_share: 0.3
+writer: prompt
+out_dir: runs/paper/stage2_prompt
+ratios: [4, 8, 16]
+memory_factors: [1, 2, 4, 8]
+max_pool: 32
+chunk_tokens: 512
+lambda_kl: 1.0
+lr_adapter: 1.0e-3
+weight_decay: 0.0
+max_grad_norm: 1.0
+warmup_frac: 0.03
+steps: 4000
+effective_batch: 32
+micro_batch: 32
+eval_every: 250
+log_every: 10
+seed: 0
