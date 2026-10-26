@@ -99,6 +99,25 @@ stage_data() {
     --n-dev "$N_DEV_PAIRS" --out-dir data/stage1
 }
 
+# Built data and teacher logits on the Hub (private dataset repo), so a later run can skip `data` and `teacher`:
+#   bash scripts/run_paper.sh data_push            # after `data`; prints the revision to hand over
+#   bash scripts/run_paper.sh teacher_push         # after `teacher`
+#   DATA_REVISION=<commit> bash scripts/run_paper.sh data_pull         # instead of `data` next time
+#   TEACHER_REVISION=<commit> bash scripts/run_paper.sh teacher_pull   # instead of `teacher`
+# HF_TOKEN must have write access to DATA_REPO for push, read access for pull.
+DATA_REPO=${DATA_REPO:-thanthienhai/vilatent-data}
+hub() { python scripts/hub_data.py "$1" --bundle "$2" --repo "$DATA_REPO" ${3:+--revision "$3"}; }
+stage_data_push() { hub push data; }
+stage_teacher_push() { hub push teacher; }
+stage_data_pull() {
+  [ -n "${DATA_REVISION:-}" ] || { log "data_pull: set DATA_REVISION to the commit printed by data_push"; return 1; }
+  hub pull data "$DATA_REVISION"
+}
+stage_teacher_pull() {
+  [ -n "${TEACHER_REVISION:-}" ] || { log "teacher_pull: set TEACHER_REVISION to the commit printed by teacher_push"; return 1; }
+  hub pull teacher "$TEACHER_REVISION"
+}
+
 stage_template() {
   log "render the fixed chat templates"
   python scripts/render_template.py --reader "$READER" --out "$CFG"

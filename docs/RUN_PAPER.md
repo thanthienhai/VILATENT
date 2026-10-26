@@ -28,8 +28,8 @@ Cần hai H100 (gọi là GPU 0 và GPU 1) trên cùng một máy. Thời gian l
 | Ngày | GPU | Lệnh (`bash scripts/run_paper.sh …`) | Thời gian ước tính | Mục |
 | --- | --- | --- | --- | --- |
 | 26/10 | 0 | lượt thử `smoke_paper.sh` trong bản sao riêng | 30–45 phút | 2 |
-| 26/10 | CPU | `data template` | 1–2 giờ | 3 |
-| 26/10 | 0 | `g0 selector aie teacher` | 1–1,5 giờ | 3, 4 |
+| 26/10 | CPU | `data data_push template` | 1–2 giờ, cộng 10–20 phút tải lên | 3 |
+| 26/10 | 0 | `g0 selector aie teacher teacher_push` | 1–1,5 giờ | 3, 4 |
 | 27/10 | 0 | `stage1` | 2–3 giờ | 5 |
 | 27/10 | 1 | `baselines` (song song với `stage1`) | 2–3 giờ | 6 |
 | 28/10 | 0 và 1 | `stage2` (chỉ bắt đầu khi `baselines` đã xong) | 4–6 giờ | 5 |
@@ -46,6 +46,7 @@ Cần hai H100 (gọi là GPU 0 và GPU 1) trên cùng một máy. Thời gian l
 | --- | --- |
 | Lượt thử (mục 2) xong | `logs/smoke_h100.log`; dòng cuối phải là `smoke: done` |
 | Sau `data` | các dòng log của bảng kiểm tra ở mục 3 |
+| Sau `data_push` và `teacher_push` | revision in ra (nội dung `data/hub_data_revision.txt`, `data/hub_teacher_revision.txt`) |
 | 30 phút sau khi `stage1` bắt đầu | `tail -n 3 runs/paper/stage1/metrics.jsonl` (lấy `sec_per_step_recent`, `peak_mem_gb`), và kết quả của `nvidia-smi dmon -s u -c 30` |
 | `baselines` xong | các file `results/paper/select/*/*.summary.json` (chỉ select; gate để sau) |
 | 30 phút sau khi `stage2` bắt đầu | như với `stage1`, cho cả ba lượt `stage2_mem`, `stage2_prompt`, `stage2_frozen` |
@@ -74,7 +75,8 @@ Dòng `DECISION: FAIL` **không** phải lỗi và không làm dừng việc: v�
 | Hệ điều hành | Linux, có CUDA toolkit (`nvcc`) khớp với bản CUDA của torch, để build `causal-conv1d` |
 | Đĩa | Nên có ≥ 100 GB trống: bộ nhớ đệm Hugging Face khoảng 30 GB; `data/` vài GB; `runs/` khoảng 1 GB mỗi checkpoint (khoảng 6 checkpoint) |
 | RAM | ≥ 64 GB (hai lượt chạy song song, mỗi lượt nạp logit thầy vào RAM) |
-| Mạng | Hugging Face Hub (Qwen3.5-2B và 9B, `vinai/phobert-base-v2`, `microsoft/llmlingua-2-xlm-roberta-large-meetingbank`, Wikipedia tiếng Việt, BKAINewsCorpus, UIT-ViQuAD 2.0) và `dl.fbaipublicfiles.com` (MLQA, chỉ để lọc rò rỉ) |
+| Mạng | Hugging Face Hub (Qwen3.5-2B và 9B, `vinai/phobert-base-v2`, `microsoft/llmlingua-2-xlm-roberta-large-meetingbank`, Wikipedia tiếng Việt, BKAINewsCorpus, UIT-ViQuAD 2.0, đều ghim revision) và `dl.fbaipublicfiles.com` (MLQA, chỉ để lọc rò rỉ). Tải lên Hub khoảng 5 GB (mục 3, 4) |
+| Token | `HF_TOKEN` có quyền **ghi** vào repo dataset private `thanthienhai/vilatent-data` (chủ đề tài cấp; repo được tạo ở lần đẩy đầu nếu chưa có) |
 
 ## 1. Cài đặt
 
@@ -86,9 +88,9 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,model,data,baselines,teacher]" "transformers==5.16.1" flash-linear-attention
 TORCH_CUDA_ARCH_LIST=9.0 MAX_JOBS=8 pip install --no-build-isolation causal-conv1d
 python -c "import torch, transformers, fla, causal_conv1d, pyvi; print(torch.__version__, transformers.__version__, torch.cuda.device_count())"
-pytest -q                                   # 58 passed (CPU)
+pytest -q                                   # 60 passed (CPU)
 grep '"units"' configs/bm25.json            # phải in "units": "word"
-export HF_TOKEN=...                         # token chủ đề tài cấp (tải nhanh hơn; không ghi vào file trong repo)
+export HF_TOKEN=...                         # token chủ đề tài cấp, có quyền ghi (không ghi vào file trong repo)
 mkdir -p logs
 ```
 
@@ -131,15 +133,30 @@ GPUS="0" bash scripts/run_paper.sh g0 2>&1 | tee -a logs/g0.log
 | `template` | `configs/readers/qwen3.5-{2b,9b}.json` | `git diff configs/readers` phải rỗng; nếu khác, **Dừng** và báo |
 | `g0` | `results/g0/Qwen_Qwen3.5-2B.json` | `G0_pass: true`; `load.deltanet_kernels` không có mục nào là `torch` |
 
-Các con số trên đã được đo lại trên máy của chủ đề tài ngày 25/10/2026. Lệch số nào thì **Dừng** và báo.
-`data` chủ yếu chạy CPU: nó duyệt toàn bộ Wikipedia tiếng Việt và một phần BKAINewsCorpus.
+Các con số trên đã được đo lại trên máy của chủ đề tài ngày 25/10/2026. Lệch số nào thì **Dừng** và báo, và **không**
+chạy `data_push`. `data` chủ yếu chạy CPU: nó duyệt toàn bộ Wikipedia tiếng Việt và một phần BKAINewsCorpus.
+
+Khi mọi dòng của bảng trên khớp, đẩy dữ liệu vừa dựng lên Hugging Face để lần sau dùng lại (mục 12):
+
+```bash
+bash scripts/run_paper.sh data_push 2>&1 | tee -a logs/data.log
+```
+
+Lệnh tải khoảng 2,5 GB (corpus chiếm gần hết) vào repo dataset private `thanthienhai/vilatent-data` trong một commit,
+kèm `MANIFEST_data.json` (đường dẫn, cỡ và SHA-256 của từng file, commit git đã sinh ra chúng). Dòng cuối in
+`{"repo": …, "bundle": "data", "revision": "<commit>"}`; revision cũng được ghi vào `data/hub_data_revision.txt`.
+Gửi revision này về. Nếu log in `WARNING: the working tree is not a clean commit`, nghĩa là code trên máy đã bị sửa:
+**Dừng** và báo.
 
 ## 4. Bộ chọn PhoBERT, đo đáp án trong văn bản, logit thầy (B3, B5, B6)
 
 ```bash
 GPUS="0" bash scripts/run_paper.sh selector aie 2>&1 | tee -a logs/prep.log
-GPUS="0 1" bash scripts/run_paper.sh teacher 2>&1 | tee -a logs/prep.log
+GPUS="0 1" bash scripts/run_paper.sh teacher teacher_push 2>&1 | tee -a logs/prep.log
 ```
+
+`teacher_push` đẩy 6 file logit thầy (khoảng 2–3 GB) vào cùng repo, kèm `MANIFEST_teacher.json`; gửi revision in ra
+(`data/hub_teacher_revision.txt`).
 
 | Bước | Việc | Sinh ra |
 | --- | --- | --- |
@@ -278,6 +295,24 @@ QA sinh tự động (không thuộc bài báo): nếu còn thời gian sau mụ
 | `… was trained with BM25 {…}, not those of configs/bm25.json` | `configs/bm25.json` bị sửa sau khi đã huấn luyện | `git checkout configs/bm25.json`; báo chủ đề tài |
 | `gradient check failed on the writer …`, `dev loss was never finite` | lỗi số học hoặc cài đặt | **Dừng**, gửi `logs/` và `runs/paper/<tên>/metrics.jsonl` |
 | `test: … is not empty` | bước `test` đã chạy | không xoá gì, báo chủ đề tài |
+| `data_push`/`teacher_push` lỗi 401 hoặc 403 | `HF_TOKEN` chưa đặt hoặc không có quyền ghi | xin chủ đề tài token có quyền ghi vào `thanthienhai/vilatent-data`, rồi chạy lại đúng bước đó (không cần dựng lại dữ liệu) |
+| `data_pull`: `local files differ from …, not replacing them` | máy đã có `data/` từ một bản dựng khác | chuyển thư mục `data/` cũ đi chỗ khác (đừng xoá), rồi chạy lại |
+| `files do not match the manifest after the download` | tải về hỏng | chạy lại `data_pull`; vẫn lỗi thì **Dừng** và báo |
+
+## 12. Lần sau: dùng lại dữ liệu đã đẩy lên Hugging Face
+
+Khi chủ đề tài giao `DATA_REVISION` (và `TEACHER_REVISION`), thay bước `data` (và `teacher`) bằng bước tải về:
+
+```bash
+DATA_REVISION=<commit> bash scripts/run_paper.sh data_pull template g0 2>&1 | tee -a logs/data.log
+TEACHER_REVISION=<commit> bash scripts/run_paper.sh teacher_pull 2>&1 | tee -a logs/prep.log
+```
+
+`data_pull` tải đúng revision đó vào `data/` rồi so từng file với `MANIFEST_data.json` (cỡ và SHA-256); lệch một file là
+dừng. Dòng cuối in `"verified": true` và commit git đã dựng dữ liệu (`built_at`). Logit thầy chỉ dùng lại được với cùng
+template (`configs/readers/qwen3.5-2b.json`) và cùng dữ liệu; nếu không, bước huấn luyện báo `teacher computed with
+another template` hoặc `N examples have no teacher`, và phải chạy lại `teacher`. Revision là mã commit, không phải tên
+nhánh, nên dữ liệu không đổi dù repo có thêm lần đẩy mới.
 
 ## Phụ lục: biến môi trường của `scripts/run_paper.sh`
 
@@ -291,6 +326,8 @@ QA sinh tự động (không thuộc bài báo): nếu còn thời gian sau mụ
 | `TRAIN_ARGS`, `EVAL_ARGS` | rỗng | chỉ dùng khi thiếu bộ nhớ (mục 11) hoặc khi chủ đề tài yêu cầu |
 | `SELECTOR_ARGS`, `LATENCY_ARGS` | rỗng | dành cho `smoke_paper.sh` |
 | `TEST_RESUME` | `0` | `1` cho phép chạy tiếp bước `test` bị ngắt, chỉ khi chủ đề tài đồng ý |
+| `DATA_REPO` | `thanthienhai/vilatent-data` | repo dataset private chứa dữ liệu đã dựng và logit thầy; giữ mặc định |
+| `DATA_REVISION`, `TEACHER_REVISION` | rỗng | commit cần tải ở `data_pull`, `teacher_pull` (mục 12) |
 | `FORCE_TUNE` | `0` | chỉ `smoke_paper.sh` đặt `1`; **không dùng trên bản chạy thật** |
 | `QUANT`, `G0_READERS`, `G0_ARGS` | `none`, reader 2B, rỗng | giữ mặc định; không dùng `QUANT=int4` trên cụm |
 | `TEACHER_URL`, `TEACHER_MODEL`, `QA_REPO`, `QA_REVISION` | như G1 | chỉ cho phần QA sinh tự động |

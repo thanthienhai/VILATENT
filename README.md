@@ -47,12 +47,14 @@ vilatent/            thư viện
   stats.py           bootstrap cặp theo seed × cụm (bài hoặc đoạn), MDE, Holm
   leak.py            chỉ mục n-gram 13 âm tiết chống rò rỉ
   data.py            định dạng JSONL, sidecar provenance <file>.meta.json, ViQuAD-Long, cửa sổ nhiều đoạn
+  hub.py             gói dữ liệu đã dựng và logit thầy trên Hugging Face: danh sách file, manifest SHA-256, kiểm tra
 scripts/             prepare_viquad (tách theo bài), prepare_external_eval (MLQA, Belebele, VietNews để lọc rò
                      rỉ), build_long (ViQuAD-Long, cửa sổ nhiều đoạn), build_corpus, make_pairs, leak_filter,
                      generate_qa, filter_qa, render_template, g0_check, tune_bm25, train_selector,
                      answer_in_evidence, precompute_teacher, train, evaluate, choose_f (f* theo F1 select),
                      cascade_report (MEF, τ, ECE), paper_report (bảng, quy tắc quyết định), position_report,
-                     latency, paper_figures; run_paper.sh nối tất cả, smoke_paper.sh chạy thử quy mô nhỏ
+                     latency, paper_figures, hub_data (đẩy/tải dữ liệu đã dựng); run_paper.sh nối tất cả,
+                     smoke_paper.sh chạy thử quy mô nhỏ
 configs/readers/     template đã render của từng reader (commit vào git; checkpoint và logit thầy gắn với hash của nó)
 configs/paper/       giai đoạn 1 đa tỉ lệ; giai đoạn 2 cho ME/M, đối chứng prompt, bộ ghi đóng băng, ViLatent-Q
 configs/bm25.json    k1, b, đơn vị của BM25 (mốc BM25 và câu gốc của ME): dò trên từ, trên ViQuAD select ở 4×, ngày
@@ -70,7 +72,7 @@ Python ≥ 3.10. Mỗi nhóm phụ thuộc là một extra; `pyvi` (tách từ t
 pip install -e ".[dev]"                          # lõi + test (CPU)
 pip install -e ".[model,data,baselines,teacher]" # reader, dữ liệu, LLMLingua-2, LLM thầy
 pip install -e ".[kernels]"                      # kernel Gated DeltaNet (Linux + CUDA), cần cho backward nhanh
-pytest -q                                        # 58 test, chạy trên CPU
+pytest -q                                        # 60 test, chạy trên CPU
 ```
 
 Qwen3.5 cần transformers có model type `qwen3_5` (đã thử với 5.12 và 5.16). Thiếu `flash-linear-attention` và

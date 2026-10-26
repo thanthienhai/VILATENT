@@ -30,14 +30,16 @@ from vilatent.data import read_jsonl, write_meta
 from vilatent.leak import LeakIndex, read_contexts
 from vilatent.text import normalize
 
-WIKI = ("wikimedia/wikipedia", "20231101.vi")
-NEWS = ("bkai-foundation-models/BKAINewsCorpus", None)
+# Hub revisions pinned on 26/10/2026: the revisions the corpus of 21/10/2026 was built from (unchanged since 2024)
+WIKI = ("wikimedia/wikipedia", "20231101.vi", "b04c8d1ceb2f5cd4588862100d08de323dccfbaa")
+NEWS = ("bkai-foundation-models/BKAINewsCorpus", None, "783321886d11abffe99316606f21d68cbfd973be")
 
 
-def stream(name: str, config: str | None, seed: int):
+def stream(name: str, config: str | None, revision: str, seed: int):
     from datasets import load_dataset
 
-    return load_dataset(name, config, split="train", streaming=True).shuffle(seed=seed, buffer_size=10_000)
+    return load_dataset(name, config, split="train", streaming=True, revision=revision).shuffle(
+        seed=seed, buffer_size=10_000)
 
 
 def main():
@@ -60,10 +62,10 @@ def main():
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     dropped_path = Path(args.out).with_suffix(".dropped.jsonl")
     with open(args.out, "w", encoding="utf-8") as f, open(dropped_path, "w", encoding="utf-8") as fd:
-        for source, (name, config), target in (("wiki", WIKI, args.n_wiki), ("news", NEWS, args.n_news)):
+        for source, (name, config, revision), target in (("wiki", WIKI, args.n_wiki), ("news", NEWS, args.n_news)):
             kept = 0
             bar = tqdm(total=target, desc=source)
-            for r in stream(name, config, args.seed):
+            for r in stream(name, config, revision, args.seed):
                 text = normalize(r["text"])[:args.max_chars]
                 title = normalize(r.get("title") or "")
                 if len(text) < args.min_chars:
@@ -84,7 +86,8 @@ def main():
                     break
             bar.close()
     stats = {f"{s}/{reason}": n for (s, reason), n in dropped.items()}
-    write_meta(args.out, sources={"wiki": "/".join(WIKI), "news": NEWS[0]}, eval_files=args.eval_files,
+    write_meta(args.out, sources={"wiki": "/".join(WIKI[:2]) + "@" + WIKI[2], "news": NEWS[0] + "@" + NEWS[2]},
+               eval_files=args.eval_files,
                eval_titles=len(titles), eval_ngrams=len(index), dropped=stats, dropped_list=dropped_path.name)
     print(json.dumps(stats, indent=2))
 

@@ -27,6 +27,8 @@ from vilatent.data import short_hash, split_viquad_train, write_jsonl, write_met
 from vilatent.text import normalize
 
 SOURCE = "taidng/UIT-ViQuAD2.0"
+# Hub revision pinned on 26/10/2026: the one every split so far was built from (unchanged since 13/04/2024)
+REVISION = "406f09a45cc106a8f7b7fd0c25078883fe58cb1f"
 DESCRIPTION = {"train": "train minus the gate and select articles and the ViWord-C dev passages",
                "gate": "train, whole articles (G1 gate only)",
                "select": "train, whole articles (checkpoints, f, tau, BM25 parameters)",
@@ -59,7 +61,7 @@ def main():
 
     from datasets import load_dataset
 
-    data = load_dataset(SOURCE)
+    data = load_dataset(SOURCE, revision=REVISION)
     splits, held = split_viquad_train(rows_of(data["train"]), args.n_viwordc_passages, args.gate_questions,
                                       args.select_questions, args.max_article_questions, args.seed)
     splits["test"] = rows_of(data["validation"])
@@ -67,7 +69,7 @@ def main():
         path = os.path.join(args.out_dir, f"viquad_{name}.jsonl")
         write_jsonl(path, rows)
         articles = sorted({r["title"] for r in rows})
-        write_meta(path, source=SOURCE, split=DESCRIPTION[name], passages=len({r["cluster"] for r in rows}),
+        write_meta(path, source=f"{SOURCE}@{REVISION}", split=DESCRIPTION[name], passages=len({r["cluster"] for r in rows}),
                    n_articles=len(articles), **({"articles": articles} if name in held else {}))
         print(f"viquad {name}: {len(rows)} answerable questions, {len({r['cluster'] for r in rows})} passages, "
               f"{len(articles)} articles")

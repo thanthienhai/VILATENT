@@ -224,3 +224,5 @@ __marimo__/
 /runs/
 /results/
 /logs/
+# huggingface_hub download metadata (scripts/hub_data.py pull downloads into the repository root)
+/.cache/
