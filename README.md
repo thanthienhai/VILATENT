@@ -55,8 +55,8 @@ scripts/             prepare_viquad (tách theo bài), prepare_external_eval (ML
                      latency, paper_figures; run_paper.sh nối tất cả, smoke_paper.sh chạy thử quy mô nhỏ
 configs/readers/     template đã render của từng reader (commit vào git; checkpoint và logit thầy gắn với hash của nó)
 configs/paper/       giai đoạn 1 đa tỉ lệ; giai đoạn 2 cho ME/M, đối chứng prompt, bộ ghi đóng băng, ViLatent-Q
-configs/bm25.json    k1, b, đơn vị của BM25, dò trên ViQuAD select (mốc BM25 và câu gốc của ME); bản trong git là
-                     bản âm tiết của G1, bước tune_bm25 ghi đè bằng bản trên từ
+configs/bm25.json    k1, b, đơn vị của BM25 (mốc BM25 và câu gốc của ME): dò trên từ, trên ViQuAD select ở 4×, ngày
+                     26/10/2026 (k1 = 2,0, b = 1,0); bước tune_bm25 bỏ qua file đã dò, trừ khi FORCE_TUNE=1
 tests/               test CPU với Qwen3.5 ngẫu nhiên tí hon, không cần GPU hay tải mô hình
 ```
 
@@ -80,9 +80,9 @@ này. Trên Windows, đặt `PYTHONIOENCODING=utf-8` để in được tiếng V
 ## Chạy thực nghiệm của bài báo
 
 ```bash
-bash scripts/smoke_paper.sh                                     # thử cả luồng ở quy mô nhỏ (Kaggle 2× T4), trong bản sao riêng
+bash scripts/smoke_paper.sh                                     # thử cả luồng ở quy mô nhỏ, trong bản sao riêng
 bash scripts/run_paper.sh data template g0                      # dữ liệu, ViQuAD-Long, template, kiểm tra kernel
-bash scripts/run_paper.sh tune_bm25 selector aie                # T4 đủ: BM25 trên từ, bộ chọn PhoBERT
+bash scripts/run_paper.sh selector aie                          # bộ chọn PhoBERT, đo đáp án trong văn bản (BM25 đã dò sẵn)
 bash scripts/run_paper.sh teacher stage1 stage2                 # H100: logit thầy, một lượt giai đoạn 1, ba lượt giai đoạn 2
 bash scripts/run_paper.sh baselines                             # H100: mốc cứng ở 4×/8×/16× (song song với huấn luyện)
 bash scripts/run_paper.sh eval_select choose eval_gate decide   # H100: f*, τ trên select; quy tắc quyết định trên gate

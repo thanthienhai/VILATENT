@@ -66,5 +66,7 @@ $RUN template
 if [ "$SMOKE_G0" = 1 ]; then
   $RUN g0 || log "G0 FAILED (kept in results/g0; on T4 this does not count, continuing)"
 fi
-$RUN tune_bm25 selector aie teacher stage1 stage2 stage2_q baselines eval_select choose eval_gate decide test figures
+# FORCE_TUNE=1: rerun the BM25 tuning on the small select file (this clone only), so its code path is tested too
+FORCE_TUNE=1 $RUN tune_bm25
+$RUN selector aie teacher stage1 stage2 stage2_q baselines eval_select choose eval_gate decide test figures
 log "done; results in results/paper (decision: results/paper/gate/decision.json), figures in paper/figures/curves.tex"

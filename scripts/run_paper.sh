@@ -115,6 +115,13 @@ stage_g0() {  # B1: Gated DeltaNet kernels, inputs_embeds, backward, decoding (a
 }
 
 stage_tune_bm25() {
+  # configs/bm25.json was tuned on words and committed on 26/10/2026 (6cc889a, Kaggle T4); a rerun (e.g. in bf16
+  # on an H100) would overwrite it with other values. Only the smoke test reruns it, with FORCE_TUNE=1.
+  if python -c 'import sys; from vilatent.baselines import load_bm25_params
+sys.exit(0 if load_bm25_params("configs/bm25.json")["units"] == "word" else 1)' && [ "${FORCE_TUNE:-0}" != 1 ]; then
+    log "tune_bm25: configs/bm25.json is already tuned on words (committed); skipped"
+    return 0
+  fi
   log "BM25 on pyvi words without question words: k1, b on select (single passages, 4x)"
   python scripts/tune_bm25.py --reader "$READER" --reader-config "$CFG" --data $TASKS/viquad_select.jsonl \
     --ratio 4 --units word --out configs/bm25.json --dtype "$DTYPE" --quant "$QUANT"
