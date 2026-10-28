@@ -1,7 +1,7 @@
 """Built data on the Hugging Face Hub, so a later run can download it instead of building it again
 (decision of 26/10/2026).
 
-Two bundles, each pushed as one commit of a private dataset repo together with a manifest
+Three bundles, each pushed as one commit of a private dataset repo together with a manifest
 (``MANIFEST_<bundle>.json``: path, size and SHA-256 of every file, the git commit that built
 them, the time):
 
@@ -10,6 +10,8 @@ them, the time):
             data/corpus (stage-1 documents and the dropped list), data/stage1 (A, B pairs), each
             with its .meta.json sidecar
   teacher   data/teacher/<reader>/*.pt (top-20 teacher log-probs, tied to the template hash)
+  selector  runs/paper/selector/* (the trained PhoBERT sentence selector of the phobert baseline;
+            trained on the train_clean and select files of the ``data`` bundle)
 
 A download checks every file against the manifest of the requested revision and refuses to
 replace a local file that differs, so a run never mixes two builds silently.
@@ -28,6 +30,7 @@ BUNDLES = {
              "data/corpus/docs.jsonl", "data/corpus/docs.jsonl.meta.json", "data/corpus/docs.dropped.jsonl",
              "data/stage1/*.jsonl", "data/stage1/*.meta.json"],
     "teacher": ["data/teacher/*/*.pt"],
+    "selector": ["runs/paper/selector/*"],
 }
 
 

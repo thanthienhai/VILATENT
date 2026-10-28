@@ -8,7 +8,7 @@ We use the answerable questions of UIT-ViQuAD~2.0~\cite{nguyen2022vlsp}, extract
 Its official validation set is our test set (2,653 questions, 557 passages, 19 articles, none in training).
 From the training set we hold out whole articles with at most 200 questions (seed~0): a \emph{gate} split (16 articles, 1,228 questions) used only for the decision rule, and a \emph{select} split (6 articles, 621 questions) used for every choice (checkpoints, BM25 parameters, $f^\ast$, $\tau$).
 The 250 passages of our earlier passage-level dev set are also removed from training.
-The test set is evaluated once, after all choices are fixed.\todo{confirm that the test run happened exactly once}
+The test set is evaluated once, after all choices are fixed.\todo{confirm that the test run happened exactly once; if the advanced stage adv\_test was run (every $f$, second seed, ViLatent-Q), say here that these cells read the test set a second time with $f^\ast$ and $\tau$ fixed on select, and mark them as an extended analysis}
 
 \textbf{ViQuAD-Long.}
 For every article of gate, select and test we join its distinct passages (exact-text deduplication; no duplicate occurs, and every passage has an answerable question) in the order of the official JSON file, separated by a blank line and without any length limit, and ask each answerable question of the article against the whole article.

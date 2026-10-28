@@ -159,8 +159,14 @@ class MemoryWriter(nn.Module):
         return [{"params": head, "lr": lr_adapter}] + ([{"params": body, "lr": lr_writer}] if body else [])
 
     def checked_params(self) -> list[tuple[str, torch.Tensor]]:
-        """Parameters whose gradient must be finite and non-zero after the first step."""
-        return [("adapter", self.adapter.weight), ("scale", self.scale)]
+        """Parameters whose gradient must be finite and non-zero after the first step: the adapter and
+        the scale, and a weight matrix of the first copied layer, so a gradient that does not reach the
+        writer layers (the adapter alone would still train) is caught. Not checked when the layers are
+        frozen; the LoRA A matrices are skipped (their gradient is 0 while B is 0)."""
+        checked = [("adapter", self.adapter.weight), ("scale", self.scale)]
+        first = [(f"layer0.{name}", p) for name, p in self.body.layers[0].named_parameters()
+                 if p.requires_grad and p.ndim >= 2 and "lora_A" not in name]
+        return checked + first[:1]
 
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
         x = x.float()

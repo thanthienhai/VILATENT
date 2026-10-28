@@ -43,6 +43,13 @@ def score_qa(prediction: str, answers: list[str]) -> dict[str, float]:
             "em": max(qa_em(prediction, a) for a in answers)}
 
 
+def aie_rate(rows: list[dict]) -> float | None:
+    """Share of answers found in the text the reader got, over the rows that have the check: cascade
+    rows that come from the full context have ``aie`` None. None when no row has it."""
+    scored = [r for r in rows if r.get("aie") is not None]
+    return sum(bool(r["aie"]) for r in scored) / len(scored) if scored else None
+
+
 def is_unreadable(raw: str, stopped: bool) -> bool:
     return "<think>" in raw or "</think>" in raw or not stopped
 

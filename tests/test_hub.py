@@ -9,7 +9,8 @@ def make_tree(root):
                        "data/tasks/viquad_long_stats.json": "{}", "data/stage1/pairs_dev.jsonl": "{}\n",
                        "data/corpus/docs.jsonl": "{}\n", "data/corpus/docs.jsonl.gz": "x",
                        "data/eval_ext/raw/MLQA_V1.zip": "x", "data/teacher/qwen/pairs_dev.pt": "t",
-                       "data/qa_gen/qa_raw.jsonl": "{}\n"}.items():
+                       "data/qa_gen/qa_raw.jsonl": "{}\n", "runs/paper/selector/selector.json": "{}",
+                       "runs/paper/selector/model.safetensors": "w", "runs/paper/stage1/best.pt": "w"}.items():
         (root / path).parent.mkdir(parents=True, exist_ok=True)
         (root / path).write_text(text, encoding="utf-8")
 
@@ -20,6 +21,7 @@ def test_bundles_hold_only_the_built_files(tmp_path):
         "data/corpus/docs.jsonl", "data/stage1/pairs_dev.jsonl", "data/tasks/viquad_gate.jsonl",
         "data/tasks/viquad_gate.jsonl.meta.json", "data/tasks/viquad_long_stats.json"]
     assert bundle_files(tmp_path, "teacher") == ["data/teacher/qwen/pairs_dev.pt"]
+    assert bundle_files(tmp_path, "selector") == ["runs/paper/selector/model.safetensors", "runs/paper/selector/selector.json"]
     with pytest.raises(FileNotFoundError):
         bundle_files(tmp_path / "empty", "data")
 

@@ -10,6 +10,11 @@ quả theo từng bảng, gửi về những gì mục "Báo sớm" yêu cầu v
 Tóm tắt việc cần làm: một lượt giai đoạn 1, ba lượt giai đoạn 2, các mốc so sánh, đánh giá trên tập select và gate, một
 quy tắc quyết định, rồi đúng **một lần** đánh giá trên tập test.
 
+**Hai bậc (quyết định ngày 27/10/2026).** Mọi bước trong tài liệu này là bậc **Cơ bản**: đủ để đọc quy tắc quyết định và
+có bảng chính của bài, và mỗi bước chỉ chạy những ô mà bước sau đọc (select chỉ cần `full` và `bm25_x2`; gate chỉ cần
+Long ở 4×; test chạy phương pháp huấn luyện ở f\* chứ không quét mọi f). Phần chạy thêm nằm ở **mục 13 (Nâng cao)**: chỉ
+làm khi Cơ bản đã xong hết và còn giờ GPU, theo đúng thứ tự ở đó. Không bỏ gì, chỉ hoãn.
+
 Nguyên tắc chung:
 
 - Đừng sửa code trên máy chạy. Mỗi file `.meta.json` ghi `git_commit`; nếu cần sửa, báo chủ đề tài để có commit mới.
@@ -32,13 +37,15 @@ Cần hai H100 (gọi là GPU 0 và GPU 1) trên cùng một máy. Thời gian l
 | 26/10 | 0 | `g0 selector aie teacher teacher_push` | 1–1,5 giờ | 3, 4 |
 | 27/10 | 0 | `stage1` | 2–3 giờ | 5 |
 | 27/10 | 1 | `baselines` (song song với `stage1`) | 2–3 giờ | 6 |
-| 28/10 | 0 và 1 | `stage2` (chỉ bắt đầu khi `baselines` đã xong) | 4–6 giờ | 5 |
-| 28/10 | 1 | nếu còn thời gian: `stage2_q`, rồi `stage2_seed2` | 2–4 giờ mỗi bước | 5 |
-| 29/10 | 0 và 1 | `eval_select choose eval_gate decide` | 3–5 giờ | 7 |
-| 30/10 | 0 và 1 | `test figures`, rồi gửi kết quả | 2–4 giờ | 8, 10 |
+| 28/10 | 0 và 1 | `stage2` (ME/M và đối chứng prompt; chỉ bắt đầu khi `baselines` đã xong) | 3–5 giờ | 5 |
+| 28/10 | 0 | `signal` (go/no-go sớm, ngay khi `stage2` xong) | dưới 1 giờ | 7 |
+| 28/10 | 1 | `stage2_frozen` (cùng lúc với `signal`) | 1–1,5 giờ | 5 |
+| 29/10 | 0 và 1 | `eval_select choose eval_gate decide` | 2–3 giờ | 7 |
+| 30/10 | 0 và 1 | `test figures`, rồi gửi kết quả | 1,5–3 giờ | 8, 10 |
+| sau đó | 0 và 1 | các bước **Nâng cao** (mục 13), chỉ khi còn giờ | tuỳ bước | 13 |
 
-`stage2_q` và `stage2_seed2` là tuỳ chọn; chỉ chạy khi chủ đề tài xác nhận còn kịp, và phải xong **trước**
-`eval_select`. Chỉ có một H100: chạy mọi bước trên `GPUS="0"`, nối tiếp nhau, và bỏ `stage2_q`, `stage2_seed2`.
+Thời gian là ước tính của chủ đề tài sau khi thu gọn phạm vi (chưa đo); số thật báo theo mục "Báo sớm". Chỉ có một H100:
+chạy mọi bước trên `GPUS="0"`, nối tiếp nhau (`stage2_frozen` sau `stage2`, trước `eval_select`), và bỏ mục Nâng cao.
 
 ## Báo sớm (gửi ngay, không chờ hết lượt)
 
@@ -48,8 +55,9 @@ Cần hai H100 (gọi là GPU 0 và GPU 1) trên cùng một máy. Thời gian l
 | Sau `data` | các dòng log của bảng kiểm tra ở mục 3 |
 | Sau `data_push` và `teacher_push` | revision in ra (nội dung `data/hub_data_revision.txt`, `data/hub_teacher_revision.txt`) |
 | 30 phút sau khi `stage1` bắt đầu | `tail -n 3 runs/paper/stage1/metrics.jsonl` (lấy `sec_per_step_recent`, `peak_mem_gb`), và kết quả của `nvidia-smi dmon -s u -c 30` |
-| `baselines` xong | các file `results/paper/select/*/*.summary.json` (chỉ select; gate để sau) |
-| 30 phút sau khi `stage2` bắt đầu | như với `stage1`, cho cả ba lượt `stage2_mem`, `stage2_prompt`, `stage2_frozen` |
+| `baselines` xong | các file `results/paper/select/*/*.summary.json` và `results/paper/gate/long/*.summary.json` |
+| 30 phút sau khi `stage2` bắt đầu | như với `stage1`, cho cả hai lượt `stage2_mem`, `stage2_prompt` (và `stage2_frozen` khi chạy) |
+| `signal` xong | `results/paper/select/long/vilatent_me_f*_r4.summary.json` và `prompt_bm25_f*_r4.summary.json` (F1 của ME và của đối chứng ở mọi f). Gửi ngay, chưa chờ bước nào khác |
 | `decide` xong | `results/paper/gate/decision.json` và dòng `DECISION: …` cuối log |
 | `test` xong | gói kết quả ở mục 10 |
 
@@ -155,6 +163,8 @@ GPUS="0" bash scripts/run_paper.sh selector aie 2>&1 | tee -a logs/prep.log
 GPUS="0 1" bash scripts/run_paper.sh teacher teacher_push 2>&1 | tee -a logs/prep.log
 ```
 
+`selector_push` đẩy bộ chọn PhoBERT đã huấn luyện (`runs/paper/selector/`) vào cùng repo, kèm `MANIFEST_selector.json`; lần sau dùng `SELECTOR_REVISION=<commit> bash scripts/run_paper.sh selector_pull` thay cho `selector`. Bộ chọn gắn với `viquad_train_clean` và select của bản `data` đã đẩy.
+
 `teacher_push` đẩy 6 file logit thầy (khoảng 2–3 GB) vào cùng repo, kèm `MANIFEST_teacher.json`; gửi revision in ra
 (`data/hub_teacher_revision.txt`).
 
@@ -182,12 +192,19 @@ Ngày 28/10, khi **cả hai** đã xong, chạy `stage2` trên hai GPU:
 GPUS="0 1" bash scripts/run_paper.sh stage2 2>&1 | tee -a logs/train.log
 ```
 
+Khi `stage2` xong, chạy đồng thời hai cửa sổ: bộ ghi đóng băng trên GPU 1 và `signal` (mục 7) trên GPU 0:
+
+```bash
+GPUS="1" bash scripts/run_paper.sh stage2_frozen 2>&1 | tee -a logs/train.log   # tmux 1
+GPUS="0" bash scripts/run_paper.sh signal 2>&1 | tee -a logs/decide.log          # tmux 2
+```
+
 | Bước | Việc | Sinh ra |
 | --- | --- | --- |
 | `stage1` | một bộ ghi đa tỉ lệ (mỗi mẫu bốc ρ ∈ {4, 8, 16, 32}), 5.000 bước × batch 32 | `runs/paper/stage1/{best.pt,metrics.jsonl,config.json}` |
-| `stage2` | ba lượt, mỗi lượt 4.000 bước: `stage2_mem` (ME/M, từ `stage1`) và `stage2_frozen` (bộ ghi đóng băng) trên GPU 0, `stage2_prompt` (đối chứng prompt, lr 1e-3) trên GPU 1 | `runs/paper/stage2_{mem,prompt,frozen}/…` |
-| `stage2_q` (nếu kịp) | ViLatent-Q, chỉ r = 4, từ `stage1` | `runs/paper/stage2_q/…` |
-| `stage2_seed2` (nếu kịp) | seed thứ hai của ME/M và của đối chứng prompt | `runs/paper/stage2_{mem,prompt}_s1/…` |
+| `stage2` | hai lượt, mỗi lượt 4.000 bước: `stage2_mem` (ME/M, từ `stage1`) trên GPU 0, `stage2_prompt` (đối chứng prompt, lr 1e-3) trên GPU 1 | `runs/paper/stage2_{mem,prompt}/…` |
+| `stage2_frozen` | bộ ghi đóng băng (kiểu LatentPress), 4.000 bước, không qua `stage1`. Quy tắc quyết định không đọc nó, nhưng nó có trong bảng chính của bài; xong **trước** `eval_select` (nếu không, chạy lại `eval_select choose` sau khi nó xong) | `runs/paper/stage2_frozen/…` |
+| `stage2_q`, `stage2_seed2` | **Nâng cao**, xem mục 13 | |
 
 ### Theo dõi khi huấn luyện
 
@@ -215,10 +232,16 @@ Huấn luyện **không có chế độ chạy tiếp**: lượt bị ngắt th�
 GPUS="1" bash scripts/run_paper.sh baselines 2>&1 | tee -a logs/baselines.log
 ```
 
-Đánh giá full, none, truncation, lead, bm25, bm25_x2 (BM25 với ngân sách 2k, tầng 2 của MEF), phobert, llmlingua2 ở
-4×, 8×, 16× trên select và gate, cho cả đoạn đơn và ViQuAD-Long, vào `results/paper/{select,gate}/{long,single}/`. Cần
-`runs/paper/selector/` (mục 4). Toàn văn và LLMLingua-2 trên ViQuAD-Long là các lượt nặng nhất. Chạy lại thì các file
-đã có được bỏ qua.
+Bậc Cơ bản chỉ chạy những mốc mà bước sau đọc:
+
+- **select** (đoạn đơn và Long): `full` và `bm25_x2` ở 4×, 8×, 16× (để chọn τ của MEF). Các mốc cứng còn lại trên select
+  không bước nào đọc (BM25 đã dò xong, f\* và τ không dùng chúng): chúng thuộc `adv_select_baselines`.
+- **gate**: chỉ ViQuAD-Long ở 4×, đủ `full`, `none`, truncation, lead, bm25, bm25_x2, phobert, llmlingua2, đúng ô mà
+  quy tắc quyết định đọc. Đoạn đơn, 8× và 16× thuộc `adv_gate`.
+
+Kết quả vào `results/paper/{select,gate}/{long,single}/`. Cần `runs/paper/selector/` (mục 4). Toàn văn và LLMLingua-2 trên
+ViQuAD-Long là các lượt nặng nhất. Chạy lại thì các file đã có được bỏ qua. Trên **test**, mốc cứng vẫn chạy đủ ở mọi
+tỉ lệ và cả hai thiết lập (mục 8).
 
 ## 7. Chọn trên select, quyết định trên gate (B12)
 
@@ -228,10 +251,11 @@ GPUS="0 1" bash scripts/run_paper.sh eval_select choose eval_gate decide 2>&1 | 
 
 | Bước | Việc | Sinh ra |
 | --- | --- | --- |
-| `eval_select` | ME/M, đối chứng prompt, bộ ghi đóng băng (và `stage2_q`, `_s1` nếu có) ở mọi (r, f) đã huấn luyện, trên select | `results/paper/select/{long,single}/…` |
+| `signal` | go/no-go sớm: ME và đối chứng prompt trên select, Long, 4×, mọi f. Ghi đúng các file mà `eval_select` sẽ ghi, nên không lặp lại việc. Gửi F1 về ngay; nếu ME không hơn đối chứng prompt ở bất kỳ f nào, báo chủ đề tài **trước** khi chạy tiếp | `results/paper/select/long/{vilatent_me,prompt_bm25}_f*_r4.*` |
+| `eval_select` | ME/M, đối chứng prompt, bộ ghi đóng băng (và `_s1` nếu đã huấn luyện) ở mọi (r, f) đã huấn luyện, trên select | `results/paper/select/{long,single}/…` |
 | `choose` | f* = f có F1 select cao nhất, riêng cho từng thiết lập và từng r; rồi τ của MEF ở f* | `results/paper/select/choices.json`, `select/*/cascade_r*.json` |
-| `eval_gate` | như `eval_select` trên gate, thêm bản đổi memory ở 4× | `results/paper/gate/{long,single}/…` |
-| `decide` | MEF với τ đã chốt, báo cáo mọi thiết lập và tỉ lệ, rồi quy tắc quyết định | `results/paper/gate/*/report_r*.json`, `results/paper/gate/decision.json` |
+| `eval_gate` | chỉ ô của quy tắc: ViQuAD-Long, 4×, ME và đối chứng prompt tại f\*. Phần còn lại của gate thuộc `adv_gate` | `results/paper/gate/long/…` |
+| `decide` | MEF với τ đã chốt, báo cáo Long 4×, rồi quy tắc quyết định | `results/paper/gate/long/report_r4.json`, `results/paper/gate/decision.json` |
 
 Quy tắc quyết định (cố định ngày 25/10/2026, trước mọi lượt chạy): trên gate, ViQuAD-Long ở 4×, ViLatent-ME ở f* với
 seed 0, đạt khi (1) F1 của ME trừ F1 mốc cứng tốt nhất (truncation, lead, LLMLingua-2, BM25, PhoBERT) ≥ 3 điểm và cận
@@ -244,9 +268,10 @@ dưới CI 95% (bootstrap theo bài) > 0; (2) cận dưới CI 95% của ME tr�
 GPUS="0 1" bash scripts/run_paper.sh test figures 2>&1 | tee -a logs/test.log
 ```
 
-`test` đánh giá mọi phương pháp trên test (đoạn đơn và ViQuAD-Long, 4×/8×/16×), MEF với τ của select, báo cáo, F1 theo
-vị trí đoạn chứa đáp án (`positions_r4.json`) và đo độ trễ (`latency_{long,single}.json`, batch 1). `figures` vẽ lại
-`paper/figures/curves.tex`.
+`test` đánh giá trên test (đoạn đơn và ViQuAD-Long, 4×/8×/16×): mọi mốc cứng; ME tại f\* và M (f = 1); đối chứng prompt tại
+f\*; bộ ghi đóng băng tại f\* của nó (nếu đã huấn luyện); bản đổi memory tại f\* của 4×; MEF với τ của select; báo cáo;
+F1 theo vị trí đoạn chứa đáp án (`positions_r4.json`) và đo độ trễ (`latency_{long,single}.json`, batch 1). Quét đủ mọi f
+thuộc `adv_test`. `figures` vẽ lại `paper/figures/curves.tex`.
 
 - Bước này từ chối chạy nếu chưa có `results/paper/gate/decision.json`, hoặc nếu `results/paper/test/` đã có file.
 - Nếu nó dừng giữa chừng vì lỗi: **không xoá** `results/paper/test/`, gửi log về và chờ. Chủ đề tài có thể cho chạy tiếp
@@ -313,6 +338,29 @@ dừng. Dòng cuối in `"verified": true` và commit git đã dựng dữ liệ
 template (`configs/readers/qwen3.5-2b.json`) và cùng dữ liệu; nếu không, bước huấn luyện báo `teacher computed with
 another template` hoặc `N examples have no teacher`, và phải chạy lại `teacher`. Revision là mã commit, không phải tên
 nhánh, nên dữ liệu không đổi dù repo có thêm lần đẩy mới.
+
+## 13. Nâng cao (chỉ khi bậc Cơ bản đã xong hết và còn giờ GPU)
+
+Các bước dưới đây tốn GPU nhưng không nằm trong quy tắc quyết định và không đổi bảng chính. Chúng không bị bỏ, chỉ hoãn.
+Chạy **từ trên xuống**, hỏi chủ đề tài trước khi bắt đầu mỗi bước; bước nào cũng chạy tiếp được (các file đã có được bỏ qua).
+
+| Thứ tự | Lệnh | Việc | Vì sao hoãn |
+| --- | --- | --- | --- |
+| N2 | `stage2_seed2`, rồi `eval_select`, `adv_test` | seed thứ hai của ME/M và của đối chứng prompt (2–4 giờ huấn luyện). Ưu tiên cao nếu hiệu ME trừ prompt sát ngưỡng | Tăng độ tin cậy của H1', không đổi quyết định |
+| N3 | `adv_test` | quét đủ f ∈ {1, 2, 4, 8} trên test cho mọi phương pháp huấn luyện và tỉ lệ, bản đổi memory ở mọi f | Bảng chính chỉ cần f\*; đường cong theo f vẽ được từ select |
+| N4 | `stage2_q`, rồi `adv_test` | ViLatent-Q ở r = 4 (H3, mô tả) | Không liên quan H1 |
+| N5 | `adv_gate` | phần còn lại của gate: đoạn đơn, 8×, 16×, mọi f, mọi mốc cứng | Trùng với test |
+| N6 | `adv_select_baselines` | truncation, lead, PhoBERT, LLMLingua-2 và `none` trên select | Không bước nào đọc |
+
+`stage2_frozen` (N1 trong đề xuất) đã nằm trong bậc Cơ bản (mục 5), vì chủ đề tài chọn đưa nó vào lượt chính.
+
+**`adv_test` đọc test lần thứ hai.** Nó chạy sau `test` (từ chối nếu `latency_single.json` chưa có), ghi vào thư mục riêng
+`results/paper/test_adv/`, chép sang đó các file của `test` (không đánh giá lại), và ghi `ADVANCED_NEW_FILES.txt` (các
+ô mới) cùng `GIT_COMMIT`. Danh sách ô của `adv_test` được cố định bởi script này, từ commit trước lượt `test`; f\* và τ
+vẫn lấy từ select, nên không có lựa chọn nào đổi sau khi thấy số liệu test. Bài ghi rõ các ô này là phân tích mở rộng.
+Không dùng `TEST_RESUME` cho việc này, và không chạy `adv_test` khi `test` chưa xong.
+
+Gửi về như mục 10, thêm `results/paper/test_adv`.
 
 ## Phụ lục: biến môi trường của `scripts/run_paper.sh`
 

@@ -216,9 +216,23 @@ def grads_finite(params) -> bool:
     return all(p.grad is None or bool(torch.isfinite(p.grad).all()) for p in params)
 
 
-# fp16 only: the first steps may overflow at the initial loss scale and are skipped by the
-# GradScaler; the gradient check runs on the first step with finite gradients, within this many
+# fp16: the first steps may overflow at the initial loss scale and are skipped by the GradScaler;
+# the gradient check runs on the first step with finite gradients, within this many. bf16/fp32:
+# a run of this many skipped steps (clip_and_step) is an error, not a bad batch
 MAX_SKIPPED_STEPS = 20
+
+
+def clip_and_step(optimizer, scaler, params, max_norm: float, fp16: bool) -> tuple[torch.Tensor, bool]:
+    """Clip the (already unscaled) gradients and take the optimizer step; returns the gradient norm
+    and whether the step was taken. In fp16 the GradScaler skips a step with a non-finite gradient;
+    in bf16 and fp32 there is no scaler, and one inf/NaN gradient would turn the weights and the
+    Adam moments into NaN for good, so that step is skipped here."""
+    grad_norm = torch.nn.utils.clip_grad_norm_(params, max_norm)
+    if not fp16 and not bool(torch.isfinite(grad_norm)):
+        return grad_norm, False
+    scaler.step(optimizer)  # skipped by the scaler (fp16) when a gradient is not finite
+    scaler.update()
+    return grad_norm, True
 
 
 def load_teachers(paths: list[str | None], template: ReaderTemplate) -> dict:
@@ -329,7 +343,7 @@ def train(cfg: TrainConfig) -> Path:
               n_dev_multi=len(dev_multi), pairs=pairs, accum=accum, dtype=cfg.dtype, quant=cfg.quant,
               trainable_params=sum(p.numel() for p in trainable), emb_norm=writer.emb_norm)
     sampler = Sampler(train_ex, train_multi, cfg.multi_share, pairs, cfg.seed)
-    best, t0, checked = float("inf"), time.time(), False
+    best, t0, checked, bad_run = float("inf"), time.time(), False, 0
     # recent speed: steps since the last train log, eval time excluded (the cumulative mean
     # sec_per_step is inflated by the first step, which compiles the kernels)
     t_recent, step_recent = t0, 0
@@ -349,9 +363,14 @@ def train(cfg: TrainConfig) -> Path:
             else:
                 check_gradients(writer)
                 checked = True
-        grad_norm = torch.nn.utils.clip_grad_norm_(trainable, cfg.max_grad_norm)
-        scaler.step(optimizer)  # skipped (fp16) when a gradient is not finite
-        scaler.update()
+        grad_norm, stepped = clip_and_step(optimizer, scaler, trainable, cfg.max_grad_norm, fp16)
+        if stepped:
+            bad_run = 0
+        else:
+            bad_run += 1
+            log.write(event="skip", step=step + 1, grad_norm=grad_norm)
+            if bad_run >= MAX_SKIPPED_STEPS:
+                raise RuntimeError(f"{bad_run} steps in a row with a non-finite gradient (step {step + 1})")
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
 

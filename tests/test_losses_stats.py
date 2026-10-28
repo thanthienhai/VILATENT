@@ -62,3 +62,31 @@ def test_bootstrap_seeds_share_cluster_draws():
 def test_holm():
     adjusted = holm({"x": 0.01, "y": 0.04, "z": 0.03})
     assert adjusted == {"x": 0.03, "z": 0.06, "y": 0.06}
+
+
+def _row(i, **kw):
+    row = dict(id=i, method="m", ratio=4, cluster="c", title="t", f1=1.0, em=1.0, unreadable=False,
+               repetitive=False, prediction="a b", used_tokens=10, n_tokens=40, budget=10, aie=None, confidence=-0.1)
+    return {**row, **kw}
+
+
+def test_aie_rate_and_summary_of_cascade_rows():
+    from vilatent.evaluate import summarize
+    from vilatent.fallback import cascade
+    from vilatent.metrics import aie_rate
+
+    assert aie_rate([_row("1")]) is None
+    assert aie_rate([_row("1", aie=True), _row("2", aie=False), _row("3")]) == 0.5  # rows without the check are left out
+
+    me = [_row("1", aie=True, evidence_tokens=4), _row("2", aie=False, evidence_tokens=6),
+          _row("3", aie=False, evidence_tokens=4)]
+    bm = [_row("1", aie=True), _row("2", aie=False), _row("3", aie=False)]
+    rows = cascade(me, bm, [_row("1"), _row("2"), _row("3")], tau=-1.0)
+    assert [r["stage"] for r in rows] == [1, 3, 3]
+    for ordered in (rows, rows[::-1]):  # the summary does not depend on which row comes first
+        summary = summarize(ordered)
+        assert summary["aie_rate"] == 1.0  # the only row with the check holds the answer
+        assert "budget_use" not in summary and "actual_ratio" not in summary  # used_tokens is a cumulative cost
+        assert summary["mean_used_tokens"] == sum(r["used_tokens"] for r in rows) / 3
+    plain = summarize([_row("1", aie=True), _row("2", aie=False)])  # non-cascade rows keep both
+    assert plain["aie_rate"] == 0.5 and plain["budget_use"] == 1.0 and plain["actual_ratio"] == 4.0

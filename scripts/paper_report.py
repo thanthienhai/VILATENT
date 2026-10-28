@@ -32,6 +32,7 @@ import json
 from pathlib import Path
 
 from vilatent.data import read_jsonl
+from vilatent.metrics import aie_rate
 from vilatent.stats import mde, paired_test
 
 HARD = ["truncation", "lead", "llmlingua2", "bm25", "phobert"]
@@ -54,8 +55,8 @@ def stats_of(rows: list[dict]) -> dict:
            "mean_used_tokens": sum(r["used_tokens"] for r in rows) / n,
            "empty_context_rate": sum(r["used_tokens"] == 0 for r in rows) / n,
            "mean_answer_syllables": sum(len(r["prediction"].split()) for r in rows) / n, "n_rows": n}
-    if rows[0].get("aie") is not None:
-        out["aie_rate"] = sum(bool(r["aie"]) for r in rows) / n
+    if (rate := aie_rate(rows)) is not None:
+        out["aie_rate"] = rate
     return out
 
 

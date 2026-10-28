@@ -23,6 +23,9 @@ export DTYPE=${DTYPE:-float16}
 export GPUS=${GPUS:-"0 1"}
 export N_WIKI=${N_WIKI:-150} N_NEWS=${N_NEWS:-150} N_PAIRS=${N_PAIRS:-64} N_DEV_PAIRS=${N_DEV_PAIRS:-16}
 export QUANT=${QUANT:-none}
+# one ratio only (4x, the decision-rule ratio): the 8x and 16x cells repeat the same code with another number,
+# and the full grid does not fit in ~45 min of T4 quota (RATIOS="4 8 16" for the whole grid)
+export RATIOS=${RATIOS:-4}
 # 16 steps: in fp16 the GradScaler skips the first ~9 (overflow at its initial scale), and training
 # fails when no step updated the writer
 export TRAIN_ARGS=${TRAIN_ARGS:-"--steps 16 --eval-every 8 --effective-batch 4 --micro-batch 2 --dev-limit 8"}
@@ -30,7 +33,7 @@ export EVAL_ARGS=${EVAL_ARGS:-"--batch-size 8 --max-batch-tokens 12000"}
 export SELECTOR_ARGS=${SELECTOR_ARGS:-"--limit 50 --epochs 1 --eval-every 20"}
 export LATENCY_ARGS=${LATENCY_ARGS:-"--docs 2 --questions-per-doc 2"}
 SMOKE_TRAIN_QA=${SMOKE_TRAIN_QA:-50}   # ViQuAD train questions kept (and their multi-passage windows)
-SMOKE_DEV_QA=${SMOKE_DEV_QA:-30}       # questions kept in each of gate, select and test (both settings)
+SMOKE_DEV_QA=${SMOKE_DEV_QA:-20}       # questions kept in each of gate, select and test (both settings)
 SMOKE_G0=${SMOKE_G0:-0}
 RUN="bash scripts/run_paper.sh"
 
@@ -68,5 +71,7 @@ if [ "$SMOKE_G0" = 1 ]; then
 fi
 # FORCE_TUNE=1: rerun the BM25 tuning on the small select file (this clone only), so its code path is tested too
 FORCE_TUNE=1 $RUN tune_bm25
-$RUN selector aie teacher stage1 stage2 stage2_q baselines eval_select choose eval_gate decide test figures
+# core, then the advanced stages once each (their code paths must work too); stage2_q and stage2_seed2 feed adv_test
+$RUN selector aie teacher stage1 stage2 stage2_frozen stage2_q stage2_seed2 baselines signal eval_select choose eval_gate decide test figures
+$RUN adv_select_baselines adv_gate adv_test
 log "done; results in results/paper (decision: results/paper/gate/decision.json), figures in paper/figures/curves.tex"

@@ -1,4 +1,4 @@
-"""Push the built data (or the teacher logits) to a private Hugging Face dataset repo, or pull a pushed
+"""Push the built data (or the teacher logits, or the trained selector) to a private Hugging Face dataset repo, or pull a pushed
 revision back (vilatent.hub). Needs HF_TOKEN in the environment: write access to push, read access to pull.
 
   push  uploads every file of the bundle and MANIFEST_<bundle>.json in one commit; prints the commit

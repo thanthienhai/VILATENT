@@ -27,7 +27,7 @@ from tqdm import tqdm
 from .baselines import TokenCounter
 from .budget import DEFAULT_CHUNK_TOKENS, context_budget
 from .data import QA_EXTRA, Example
-from .metrics import is_repetitive, is_unreadable, parse_answer, score_qa
+from .metrics import aie_rate, is_repetitive, is_unreadable, parse_answer, score_qa
 from .model import ViLatent
 from .reader import Generation, decode, embed_ids, eos_ids, greedy_generate
 from .template import ReaderTemplate
@@ -201,14 +201,18 @@ def summarize(rows: list[dict]) -> dict:
                "empty_context_rate": sum(r["used_tokens"] == 0 for r in rows) / n,
                "mean_context_tokens": sum(r["n_tokens"] for r in rows) / n,
                "mean_used_tokens": sum(used) / n}
-    if rows[0].get("aie") is not None:
-        summary["aie_rate"] = sum(bool(r["aie"]) for r in rows) / n
-    if rows[0]["budget"] is not None:
+    if (rate := aie_rate(rows)) is not None:
+        summary["aie_rate"] = rate
+    # cascade rows (they have a "stage") carry the cumulative cost in used_tokens, not a use of the budget
+    if rows[0]["budget"] is not None and "stage" not in rows[0]:
         summary["actual_ratio"] = sum(r["n_tokens"] for r in rows) / max(1, sum(used))
         summary["budget_use"] = sum(used) / max(1, sum(r["budget"] for r in rows))
     for key in ("factor", "pool"):
         if key in rows[0]:
             summary[key] = rows[0][key]
-    if "evidence_tokens" in rows[0]:  # ViLatent: share of the budget held by evidence text (Table 3)
-        summary["text_share"] = sum(r["evidence_tokens"] / r["budget"] for r in rows if r["budget"]) / n
+    # ViLatent: share of the budget held by evidence text (Table 3). Cascade rows mix ME rows with
+    # BM25 / full-context rows that have no evidence_tokens, so average over the ME rows only.
+    ev = [r for r in rows if r.get("evidence_tokens") is not None and r["budget"]]
+    if ev:
+        summary["text_share"] = sum(r["evidence_tokens"] / r["budget"] for r in ev) / len(ev)
     return summary

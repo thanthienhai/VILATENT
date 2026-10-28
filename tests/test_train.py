@@ -100,3 +100,38 @@ def test_train_multi_rate_and_variants(tokenizer, tmp_path, monkeypatch):
     loaded = load_vilatent(prompt, reader, tokenizer, template)
     assert isinstance(loaded.writer, PromptWriter) and loaded.writer.n_prompt == 2  # ceil(8 / 4)
     assert loaded.pairs == [(4, 1), (4, 2)]
+
+
+def _param_and_optimizer(grad):
+    p = torch.nn.Parameter(torch.ones(3))
+    opt = torch.optim.AdamW([p], lr=0.1, weight_decay=0.0)
+    p.grad = torch.tensor(grad)
+    return p, opt
+
+
+def test_clip_and_step_skips_non_finite_gradients_without_a_scaler():
+    scaler = torch.amp.GradScaler(enabled=False)  # bf16 / fp32
+    p, opt = _param_and_optimizer([1.0, float("inf"), 0.5])
+    grad_norm, stepped = T.clip_and_step(opt, scaler, [p], 1.0, fp16=False)
+    assert not stepped and not torch.isfinite(grad_norm) and torch.equal(p.data, torch.ones(3))
+    assert not opt.state[p]  # the Adam moments are untouched too
+    p.grad = torch.tensor([0.0, 0.0, float("nan")])
+    assert not T.clip_and_step(opt, scaler, [p], 1.0, fp16=False)[1] and torch.isfinite(p.data).all()
+    p.grad = torch.tensor([3.0, 0.0, 4.0])  # finite: clipped to norm 1 and applied
+    grad_norm, stepped = T.clip_and_step(opt, scaler, [p], 1.0, fp16=False)
+    assert stepped and grad_norm == pytest.approx(5.0) and (p.data < 1).sum() == 2 and torch.isfinite(p.data).all()
+
+
+def test_check_gradients_sees_a_dead_writer_body(reader, tokenizer):
+    from vilatent.writer import MemoryWriter
+
+    writer = MemoryWriter(reader, tokenizer, n_layers=4, autocast=False)
+    names = [name for name, _ in writer.checked_params()]
+    assert names[:2] == ["adapter", "scale"] and len(names) == 3 and names[2].startswith("layer0.")
+    assert [n for n, _ in MemoryWriter(reader, tokenizer, 4, frozen=True, autocast=False).checked_params()] == names[:2]
+    for _, p in writer.checked_params():  # all reached: passes
+        p.grad = torch.ones_like(p)
+    T.check_gradients(writer)
+    writer.checked_params()[2][1].grad = None  # adapter and scale train, the layers get nothing
+    with pytest.raises(RuntimeError, match="layer0"):
+        T.check_gradients(writer)

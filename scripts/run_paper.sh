@@ -2,11 +2,17 @@
 # Paper pipeline (ACIIDS 2027; checklist of 25/10/2026, docs/RUN_PAPER.md), one stage at a time:
 #   bash scripts/run_paper.sh data template g0                     # data, fixed templates, kernel check (B1, B4)
 #   bash scripts/run_paper.sh tune_bm25 selector aie                # T4 is enough: BM25 k1/b, PhoBERT (B3, B5)
-#   bash scripts/run_paper.sh teacher stage1 stage2                 # H100 (B6, B8, B9, B10, B13)
+#   bash scripts/run_paper.sh teacher stage1 stage2 stage2_frozen   # H100 (B6, B8, B9, B10, B13)
 #   bash scripts/run_paper.sh baselines                             # H100, can run during training (B7)
+#   bash scripts/run_paper.sh signal                                # early go/no-go: ME vs prompt on select, Long, 4x
 #   bash scripts/run_paper.sh eval_select choose eval_gate decide   # H100 (B12)
-#   bash scripts/run_paper.sh test                                  # ONCE, after decide (B14)
-#   optional: stage2_q (B17), stage2_seed2 (B15) before eval_select; figures after test
+#   bash scripts/run_paper.sh test figures                          # ONCE, after decide (B14)
+# Two tiers (decision of 27/10/2026). CORE = the stages above: enough for the decision rule and the paper's main
+# tables, and only the cells they read: select needs full and bm25_x2 of the hard baselines, gate only Long at 4x,
+# test the trained methods at f* (and ME at f = 1, i.e. M) instead of every f. ADVANCED = stages named adv_* and
+# the optional training runs; run them only when CORE is done and GPU time is left, in this order:
+#   stage2_seed2 (B15), stage2_q (B17), adv_select_baselines, adv_gate, then adv_test (test again, see its comment)
+# Every advanced stage is incremental (--skip-existing), so none has to be redone after CORE.
 # Splits (whole Wikipedia articles): train; select (every choice: BM25 k1/b, selector checkpoint,
 # stage-2 checkpoint, f*, τ); gate (only the pre-specified decision rule, ViQuAD-Long at 4x); test
 # (official validation, read once by the `test` stage). Two settings: single passages ("single") and
@@ -74,6 +80,10 @@ task_file() { if [ "$2" = long ]; then echo "$TASKS/viquad_long_$1.jsonl"; else 
 # a value of choices.json: setting, ratio, key
 choice() { python -c 'import json, sys; print(json.load(open(sys.argv[1]))["settings"][sys.argv[2]][sys.argv[3]][sys.argv[4]])' \
   "$CHOICES" "$1" "$2" "$3"; }
+fstar() { choice "$1" "$2" f_star; }   # setting, ratio
+
+# factors "a+b" for a method spec: sorted, no duplicates, "None" (no choice made) dropped; e.g. flist 1 4 4 -> 1+4
+flist() { printf '%s\n' "$@" | grep -vx 'None' | sort -un | paste -sd+; }
 
 # BM25 of the paper: pyvi words without question words, tuned on select (stage tune_bm25)
 require_word_bm25() {
@@ -104,11 +114,13 @@ stage_data() {
 #   bash scripts/run_paper.sh teacher_push         # after `teacher`
 #   DATA_REVISION=<commit> bash scripts/run_paper.sh data_pull         # instead of `data` next time
 #   TEACHER_REVISION=<commit> bash scripts/run_paper.sh teacher_pull   # instead of `teacher`
+#   bash scripts/run_paper.sh selector_push; SELECTOR_REVISION=<commit> bash scripts/run_paper.sh selector_pull  # instead of `selector`
 # HF_TOKEN must have write access to DATA_REPO for push, read access for pull.
 DATA_REPO=${DATA_REPO:-thanthienhai/vilatent-data}
 hub() { python scripts/hub_data.py "$1" --bundle "$2" --repo "$DATA_REPO" ${3:+--revision "$3"}; }
 stage_data_push() { hub push data; }
 stage_teacher_push() { hub push teacher; }
+stage_selector_push() { hub push selector; }   # after `selector`
 stage_data_pull() {
   [ -n "${DATA_REVISION:-}" ] || { log "data_pull: set DATA_REVISION to the commit printed by data_push"; return 1; }
   hub pull data "$DATA_REVISION"
@@ -116,6 +128,10 @@ stage_data_pull() {
 stage_teacher_pull() {
   [ -n "${TEACHER_REVISION:-}" ] || { log "teacher_pull: set TEACHER_REVISION to the commit printed by teacher_push"; return 1; }
   hub pull teacher "$TEACHER_REVISION"
+}
+stage_selector_pull() {
+  [ -n "${SELECTOR_REVISION:-}" ] || { log "selector_pull: set SELECTOR_REVISION to the commit printed by selector_push"; return 1; }
+  hub pull selector "$SELECTOR_REVISION"
 }
 
 stage_template() {
@@ -174,35 +190,56 @@ train_cmd() { echo "python scripts/train.py --config configs/paper/$1.yaml --dty
 
 stage_stage1() { on_gpus "$(train_cmd stage1)"; }  # B8: one multi-rate writer
 
-stage_stage2() {  # B9 (ME/M), B10 (prompt control), B13 (frozen writer)
+stage_stage2() {  # B9 (ME/M), B10 (prompt control): the two runs the decision rule reads
   require_word_bm25
-  on_gpus "$(train_cmd stage2_mem)" "$(train_cmd stage2_prompt)" "$(train_cmd stage2_frozen)"
+  on_gpus "$(train_cmd stage2_mem)" "$(train_cmd stage2_prompt)"
 }
 
-stage_stage2_q() { on_gpus "$(train_cmd stage2_q)"; }  # B17, if time permits
+# B13: frozen writer (LatentPress-style). Not read by the rule, but in the paper's main table: start it on the GPU
+# that is free first, and finish it before eval_select (otherwise rerun eval_select and choose afterwards).
+stage_stage2_frozen() { require_word_bm25; on_gpus "$(train_cmd stage2_frozen)"; }
 
-stage_stage2_seed2() {  # B15, if time permits: second seed of ME/M and of the control
+stage_stage2_q() { on_gpus "$(train_cmd stage2_q)"; }  # B17, advanced
+
+stage_stage2_seed2() {  # B15, advanced: second seed of ME/M and of the control
   on_gpus "$(train_cmd stage2_mem) --seed 1 --out-dir $RUNS/stage2_mem_s1" \
           "$(train_cmd stage2_prompt) --seed 1 --out-dir $RUNS/stage2_prompt_s1"
 }
 
-# B7: hard baselines and references, every ratio, select and gate, both settings (no training needed)
+HARD_METHODS="full none truncation lead bm25 bm25_x2 phobert llmlingua2"
+
+# B7, core: the hard baselines and references that something reads. Select: only full and bm25_x2 (tiers 2 and 3 of the
+# cascade, to choose τ); gate: the cell of the decision rule (Long, 4x) with all of them. The rest is adv_select_baselines
+# and adv_gate. Test (stage_test) has them all.
 stage_baselines() {
   require_word_bm25
-  local jobs=() split setting
-  for split in select gate; do
-    for setting in long single; do
-      jobs+=("$(ev) --data $(task_file $split $setting) --ratios $RATIOS --out-dir $RES/$split/$setting --methods full none truncation lead bm25 bm25_x2 phobert llmlingua2")
-    done
+  local jobs=() setting
+  for setting in long single; do
+    jobs+=("$(ev) --data $(task_file select $setting) --ratios $RATIOS --out-dir $RES/select/$setting --methods full bm25_x2")
   done
+  jobs+=("$(ev) --data $(task_file gate long) --ratios 4 --out-dir $RES/gate/long --methods $HARD_METHODS")
   on_gpus "${jobs[@]}"
 }
 
-# the trained methods of a split, every ratio and f (f* is chosen afterwards); optional runs if present
+# trained methods that exist, every ratio and f (f* is chosen afterwards); the frozen writer and the second seed
+# are used when their checkpoint exists
 soft_methods() {
-  local m="vilatent:$RUNS/stage2_mem/best.pt vilatent:$RUNS/stage2_prompt/best.pt vilatent:$RUNS/stage2_frozen/best.pt"
+  local m="vilatent:$RUNS/stage2_mem/best.pt vilatent:$RUNS/stage2_prompt/best.pt"
+  [ -f $RUNS/stage2_frozen/best.pt ] && m+=" vilatent:$RUNS/stage2_frozen/best.pt"
   [ -f $RUNS/stage2_mem_s1/best.pt ] && m+=" vilatent:$RUNS/stage2_mem_s1/best.pt,tag=s1"
   [ -f $RUNS/stage2_prompt_s1/best.pt ] && m+=" vilatent:$RUNS/stage2_prompt_s1/best.pt,tag=s1"
+  echo "$m"
+}
+
+# the same at the choices made on select, for one setting and ratio: ME at f* and M (f = 1), the control at f*, the
+# frozen writer at its own f*, the second seed at f*
+soft_at_choice() {  # setting, ratio
+  local f ff m
+  f=$(fstar $1 $2); ff=$(choice $1 $2 frozen_f_star)
+  m="vilatent:$RUNS/stage2_mem/best.pt,f=$(flist 1 "$f") vilatent:$RUNS/stage2_prompt/best.pt,f=$f"
+  [ -f $RUNS/stage2_frozen/best.pt ] && [ "$ff" != None ] && m+=" vilatent:$RUNS/stage2_frozen/best.pt,f=$ff"
+  [ -f $RUNS/stage2_mem_s1/best.pt ] && m+=" vilatent:$RUNS/stage2_mem_s1/best.pt,f=$f,tag=s1"
+  [ -f $RUNS/stage2_prompt_s1/best.pt ] && m+=" vilatent:$RUNS/stage2_prompt_s1/best.pt,f=$f,tag=s1"
   echo "$m"
 }
 
@@ -212,6 +249,15 @@ stage_eval_select() {  # B12, first half: everything f* and τ are chosen from
     jobs+=("$(ev) --data $(task_file select $setting) --ratios $RATIOS --out-dir $RES/select/$setting --methods $(soft_methods)")
   done
   on_gpus "${jobs[@]}"
+}
+
+# Early go/no-go (core, optional but cheap): ME and the control on select, Long, 4x, every f. The files are the ones
+# eval_select would write, so nothing is repeated. Report the F1 of vilatent_me_f* and prompt_bm25_f* in
+# results/paper/select/long/*_r4.summary.json before the rest is spent.
+stage_signal() {
+  require_word_bm25
+  on_gpus "$(ev) --data $(task_file select long) --ratios 4 --out-dir $RES/select/long --methods vilatent:$RUNS/stage2_mem/best.pt" \
+          "$(ev) --data $(task_file select long) --ratios 4 --out-dir $RES/select/long --methods vilatent:$RUNS/stage2_prompt/best.pt"
 }
 
 stage_choose() {  # f* by select F1, then the cascade τ at f*, per setting and ratio
@@ -225,35 +271,38 @@ stage_choose() {  # f* by select F1, then the cascade τ at f*, per setting and 
   done
 }
 
-# gate and test: the same soft methods, the swapped-memory control at 4x (every f), ViLatent-Q at 4x
+# ADVANCED, the full grid of a split: every trained method at every ratio and f, the swapped-memory control at 4x
+# (every f) and ViLatent-Q at 4x. Reads the task file of $1 and writes into the results of $2 (default $1).
 eval_soft_jobs() {
-  local split=$1 setting q=""
+  local split=$1 out=${2:-$1} setting q=""
   [ -f $RUNS/stage2_q/best.pt ] && q=" vilatent:$RUNS/stage2_q/best.pt"
   for setting in long single; do
-    echo "$(ev) --data $(task_file $split $setting) --ratios $RATIOS --out-dir $RES/$split/$setting --methods $(soft_methods)"
-    echo "$(ev) --data $(task_file $split $setting) --ratios 4 --out-dir $RES/$split/$setting --methods vilatent:$RUNS/stage2_mem/best.pt,swap=0$q"
+    echo "$(ev) --data $(task_file $split $setting) --ratios $RATIOS --out-dir $RES/$out/$setting --methods $(soft_methods)"
+    echo "$(ev) --data $(task_file $split $setting) --ratios 4 --out-dir $RES/$out/$setting --methods vilatent:$RUNS/stage2_mem/best.pt,swap=0$q"
   done
 }
 
-reports() {  # cascade (τ from select), report of every setting and ratio, of one split
-  local split=$1 setting r
-  for setting in long single; do
-    for r in $RATIOS; do
+reports() {  # cascade (τ from select) and report of a split's results; settings and ratios default to all
+  local split=$1 settings=${2:-"long single"} ratios=${3:-$RATIOS} setting r
+  for setting in $settings; do
+    for r in $ratios; do
       python scripts/cascade_report.py --results-dir $RES/$split/$setting --setting $setting --ratio $r --choices $CHOICES
       python scripts/paper_report.py --results-dir $RES/$split/$setting --setting $setting --ratio $r --choices $CHOICES
     done
   done
 }
 
+# core: only the cell the rule reads (Long, 4x): ME and the control at f*, one GPU each
 stage_eval_gate() {
-  local jobs=()
-  mapfile -t jobs < <(eval_soft_jobs gate)
-  on_gpus "${jobs[@]}"
+  local f
+  f=$(fstar long 4)
+  on_gpus "$(ev) --data $(task_file gate long) --ratios 4 --out-dir $RES/gate/long --methods vilatent:$RUNS/stage2_mem/best.pt,f=$f" \
+          "$(ev) --data $(task_file gate long) --ratios 4 --out-dir $RES/gate/long --methods vilatent:$RUNS/stage2_prompt/best.pt,f=$f"
 }
 
 # the pre-specified rule: gate, ViQuAD-Long, 4x (its line is the last of the log)
 stage_decide() {
-  reports gate
+  reports gate long 4
   python scripts/paper_report.py --results-dir $RES/gate/long --setting long --ratio 4 --choices $CHOICES --decide
 }
 
@@ -269,11 +318,15 @@ stage_test() {
     log "test: $out is not empty; the test set is read once (ask the project owner before resuming or deleting)"
     return 1
   fi
-  log "ViQuAD test (single and Long), read once"
+  log "ViQuAD test (single and Long), read once: every hard baseline and ratio; trained methods at the choices of select"
   for setting in long single; do
-    jobs+=("$(ev) --data $(task_file test $setting) --ratios $RATIOS --out-dir $out/$setting --methods full none truncation lead bm25 bm25_x2 phobert llmlingua2")
+    jobs+=("$(ev) --data $(task_file test $setting) --ratios $RATIOS --out-dir $out/$setting --methods $HARD_METHODS")
+    for r in $RATIOS; do
+      jobs+=("$(ev) --data $(task_file test $setting) --ratios $r --out-dir $out/$setting --methods $(soft_at_choice $setting $r)")
+    done
+    # swapped memory: ME at f* of 4x, with its own evidence, reading another article's memory
+    jobs+=("$(ev) --data $(task_file test $setting) --ratios 4 --out-dir $out/$setting --methods vilatent:$RUNS/stage2_mem/best.pt,f=$(fstar $setting 4),swap=0")
   done
-  mapfile -t -O ${#jobs[@]} jobs < <(eval_soft_jobs test)
   on_gpus "${jobs[@]}"
   reports test
   python scripts/position_report.py --results-dir $out/long --ratio 4
@@ -282,6 +335,50 @@ stage_test() {
       --checkpoint $RUNS/stage2_mem/best.pt --ratio 4 --factor "$(choice $setting 4 f_star)" --selector $SELECTOR \
       --llmlingua --cascade $out/$setting/cascade_r4.json --dtype "$DTYPE" --out $out/latency_$setting.json $LATENCY_ARGS
   done
+}
+
+# ADVANCED stages. Run after CORE, in the order of the header; each is incremental.
+
+stage_adv_select_baselines() {  # the hard baselines nothing reads on select (BM25 was tuned there, f* and τ do not use them)
+  require_word_bm25
+  local jobs=() setting
+  for setting in long single; do
+    jobs+=("$(ev) --data $(task_file select $setting) --ratios $RATIOS --out-dir $RES/select/$setting --methods $HARD_METHODS")
+  done
+  on_gpus "${jobs[@]}"
+}
+
+stage_adv_gate() {  # the rest of gate: single passages, 8x and 16x, every f, every control; reports for all of it
+  require_word_bm25
+  local jobs=() setting
+  for setting in long single; do
+    jobs+=("$(ev) --data $(task_file gate $setting) --ratios $RATIOS --out-dir $RES/gate/$setting --methods $HARD_METHODS")
+  done
+  mapfile -t -O ${#jobs[@]} jobs < <(eval_soft_jobs gate)
+  on_gpus "${jobs[@]}"
+  reports gate
+}
+
+# The test set read a second time, for what CORE did not run: every f of every trained method at every ratio, the swapped
+# memory at every f, the second seed and ViLatent-Q if trained. The list is fixed by this script (commit it before the
+# main test); f* and τ still come from select, and nothing here can change a choice or the decision. The main test
+# results are copied into results/paper/test_adv (not evaluated again) so the reports compare with the same baselines;
+# ADVANCED_NEW_FILES.txt lists what is new. The paper must say that these cells are an extended analysis.
+stage_adv_test() {
+  local main=$RES/test out=$RES/test_adv jobs=() setting
+  if [ ! -f "$main/latency_single.json" ]; then
+    log "adv_test: the main test stage has not finished ($main/latency_single.json is missing)"
+    return 1
+  fi
+  for setting in long single; do
+    mkdir -p "$out/$setting"
+    cp -n "$main/$setting"/* "$out/$setting"/ 2>/dev/null || true
+  done
+  git rev-parse HEAD > "$out/GIT_COMMIT" 2>/dev/null || true
+  mapfile -t jobs < <(eval_soft_jobs test test_adv)
+  on_gpus "${jobs[@]}"
+  reports test_adv
+  (cd "$out" && for f in */*.summary.json; do [ -e "../test/$f" ] || echo "$f"; done) > "$out/ADVANCED_NEW_FILES.txt"
 }
 
 stage_figures() {
