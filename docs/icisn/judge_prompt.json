@@ -1,0 +1,9 @@
+{
+  "version": "judge_v1",
+  "system": "Bạn là người chấm câu trả lời cho bài đọc hiểu tiếng Việt. Chỉ trả lời một từ.",
+  "user_template": "Câu hỏi: {question}\n\nĐáp án vàng (chấp nhận bất kỳ đáp án nào trong danh sách):\n{gold}\n\nCâu trả lời cần chấm: {prediction}\n\nQuy tắc chấm:\n- ĐÚNG nếu câu trả lời nêu cùng thông tin với ít nhất một đáp án vàng và trả lời đúng câu hỏi. Diễn đạt khác, dài hơn hoặc ngắn hơn vẫn được, miễn là không thêm thông tin mâu thuẫn hoặc nêu thực thể, số liệu khác.\n- SAI nếu thiếu ý chính của đáp án, nêu thực thể hoặc số liệu khác, mâu thuẫn với đáp án vàng, hoặc không trả lời câu hỏi (ví dụ chỉ lặp lại câu hỏi).\n- Chỉ dựa vào câu hỏi và đáp án vàng; không dùng kiến thức ngoài.\n\nChỉ trả lời đúng một từ: ĐÚNG hoặc SAI.",
+  "gold_format": "một dòng '- <đáp án>' cho mỗi đáp án vàng khác nhau, giữ thứ tự dữ liệu",
+  "max_tokens": 8,
+  "temperature": 0,
+  "prediction_max_chars": 1000
+}

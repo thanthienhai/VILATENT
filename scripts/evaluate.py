@@ -4,7 +4,7 @@
 Text methods: full, none, truncation, lead, bm25, phobert (needs --selector), llmlingua2; a
 ``_x<s>`` suffix multiplies the budget by s (``bm25_x2``: stage 2 of the cascade, BM25 at 2k(r)).
 
-ViLatent: ``vilatent:<checkpoint>[,f=<factors>][,tag=<tag>][,swap=<seed>]``. One checkpoint
+ViLatent: ``vilatent:<checkpoint>[,f=<factors>][,tag=<tag>][,swap=<seed>][,zero=1][,shuf=<seed>]``. One checkpoint
 serves every (r, f) it was trained on (multi-rate writer); it is read at every --ratios r with
 the factors ``f`` ("1", "2+4+8" or "all", the default: every trained f at that r; pairs that
 were not trained are skipped). Names:
@@ -15,7 +15,9 @@ were not trained are skipped). Names:
   vilatent_q                                       a writer that sees the question (ViLatent-Q)
 
 then ``_<tag>`` (e.g. tag=s1 for the second seed) and ``_swap`` with ``swap=<seed>`` (every
-question reads another article's memory, vilatent.evaluate.swap_memories). BM25 (baseline and
+question reads another article's memory, vilatent.evaluate.swap_memories); ICISN content controls
+``_zero`` (``zero=1``: inner memory vectors set to 0) and ``_shuf`` (``shuf=<seed>``: the same vectors in
+another order), vilatent.evaluate.perturb_memories. BM25 (baseline and
 ME evidence) uses --bm25-config; an ME checkpoint must have been trained with the same values.
 
 Usage:
@@ -29,7 +31,7 @@ import json
 import re
 from pathlib import Path
 
-from vilatent.baselines import build_baseline, load_bm25_params
+from vilatent.baselines import Summary, SummaryPlusE, build_baseline, load_bm25_params
 from vilatent.data import load_examples, write_jsonl
 from vilatent.evaluate import MAX_BATCH_TOKENS, evaluate_text, evaluate_vilatent, summarize
 from vilatent.model import load_vilatent
@@ -44,7 +46,7 @@ def save(rows: list[dict], out_dir: Path, stem: str) -> None:
     print(json.dumps(summary, ensure_ascii=False))
 
 
-def vilatent_name(model, factor: int, tag: str | None, swap: bool) -> str:
+def vilatent_name(model, factor: int, tag: str | None, swap: bool, mode: str | None = None) -> str:
     cfg = model.writer.config()
     if model.sees_question:
         base = "vilatent_q"
@@ -52,7 +54,7 @@ def vilatent_name(model, factor: int, tag: str | None, swap: bool) -> str:
         prefix = "prompt" if cfg.get("kind") == "prompt" else ("frozen" if cfg.get("frozen") else "vilatent")
         evidence = "_bm25" if prefix == "prompt" else "_me"
         base = f"{prefix}_m" if factor == 1 else f"{prefix}{evidence}_f{factor}"
-    return base + (f"_{tag}" if tag else "") + ("_swap" if swap else "")
+    return base + (f"_{tag}" if tag else "") + ("_swap" if swap else "") + ({"zero": "_zero", "shuffle": "_shuf"}[mode] if mode else "")
 
 
 def main():
@@ -90,6 +92,8 @@ def main():
             path, _, opts = spec.removeprefix("vilatent:").partition(",")
             opts = dict(o.split("=", 1) for o in opts.split(",") if o)
             swap = int(opts["swap"]) if "swap" in opts else None
+            mode = "zero" if "zero" in opts else ("shuffle" if "shuf" in opts else None)  # ICISN content controls
+            mode_seed = int(opts["shuf"]) if "shuf" in opts else 0
             model = load_vilatent(path, reader, tokenizer, template)
             if model.chunk_tokens != args.chunk_tokens:  # budgets of all methods must use the same chunks
                 raise SystemExit(f"{path} uses chunks of {model.chunk_tokens} tokens, not {args.chunk_tokens}")
@@ -102,13 +106,28 @@ def main():
                     if factor not in trained:
                         print(f"skip {path} at r={ratio}, f={factor}: not trained (pairs {model.pairs})")
                         continue
-                    name = vilatent_name(model, factor, opts.get("tag"), swap is not None)
+                    name = vilatent_name(model, factor, opts.get("tag"), swap is not None, mode)
                     if done(f"{name}_r{ratio}"):
                         continue
                     rows = evaluate_vilatent(model, examples, ratio, factor, args.batch_size, method=name,
-                                             swap_seed=swap, max_batch_tokens=args.max_batch_tokens)
+                                             swap_seed=swap, max_batch_tokens=args.max_batch_tokens,
+                                             memory_mode=mode, mode_seed=mode_seed)
                     save(rows, out_dir, f"{name}_r{ratio}")
             del model
+            continue
+        icisn = re.fullmatch(r"(sum|sumE):([A-Za-z0-9]+):(.+?)(?:,f=(\d+))?", spec)  # sum:<tag>:<summaries.json>
+        if icisn:  # ICISN: summary conditions; stem sum_<tag> / sumE_<tag>_f<f>
+            kind, tag, path, f = icisn.group(1), icisn.group(2), icisn.group(3), int(icisn.group(4) or 2)
+            baseline = Summary(path) if kind == "sum" else SummaryPlusE(path, bm25, f, args.chunk_tokens)
+            stem0 = f"{kind}_{tag}" + (f"_f{f}" if kind == "sumE" else "")
+            for ratio in args.ratios:
+                if done(f"{stem0}_r{ratio}"):
+                    continue
+                if hasattr(baseline, "set_ratio"):
+                    baseline.set_ratio(ratio)
+                rows = evaluate_text(reader, tokenizer, template, baseline, examples, ratio, args.chunk_tokens,
+                                     args.batch_size, method=stem0, max_batch_tokens=args.max_batch_tokens)
+                save(rows, out_dir, f"{stem0}_r{ratio}")
             continue
         match = re.fullmatch(r"(.+?)(?:_x(\d+))?", spec)
         base, scale = match.group(1), int(match.group(2) or 1)

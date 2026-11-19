@@ -1,0 +1,14 @@
+{
+ "version": "sum_v1",
+ "note": "Three variants, all question-blind. {n} = target length in Vietnamese words (syllables), set per document so that the summary has about 1.3 x k(4) reader tokens; the reader reads its first k(r) tokens. Chosen on ViQuAD select only (rule in PREREG_CONFIRM). {src} = length of the document in words, {pct} = round(100*n/src). Wording 'hard limit' added after a probe on viquad_long_select showed summaries 1.5-3.4x over target (no test data used).",
+ "system": "Bạn là biên tập viên tóm tắt văn bản tiếng Việt. Chỉ trả về bản tóm tắt, không lời dẫn. Bạn luôn tuân thủ giới hạn độ dài: bản tóm tắt phải ngắn hơn nhiều so với văn bản gốc và không bao giờ vượt quá số từ yêu cầu.",
+ "variants": {
+  "v1": "Tóm tắt văn bản sau bằng tiếng Việt. GIỚI HẠN CỨNG: tối đa {n} từ (tiếng, tính theo khoảng trắng); văn bản gốc dài khoảng {src} từ nên bản tóm tắt chỉ bằng khoảng {pct}% độ dài gốc. Giữ nguyên tên riêng, số liệu, ngày tháng và các sự kiện chính.\n\nVăn bản:\n{doc}",
+  "v2": "Viết bản tóm tắt tiếng Việt dày thông tin cho văn bản sau bằng các câu ngắn gọn. GIỚI HẠN CỨNG: tối đa {n} từ (tiếng, tính theo khoảng trắng), tức khoảng {pct}% độ dài văn bản gốc ({src} từ). Ưu tiên thực thể (người, nơi chốn, tổ chức), số liệu, ngày tháng và quan hệ giữa chúng; bỏ chi tiết phụ; không bình luận, không suy diễn.\n\nVăn bản:\n{doc}",
+  "v3": "Tóm tắt văn bản sau bằng tiếng Việt, theo đúng thứ tự nội dung xuất hiện và bao quát toàn bộ văn bản, mỗi ý quan trọng một câu. GIỚI HẠN CỨNG: tối đa {n} từ (tiếng, tính theo khoảng trắng), bằng khoảng {pct}% văn bản gốc ({src} từ). Giữ nguyên tên riêng và số liệu.\n\nVăn bản:\n{doc}"
+ },
+ "model": "DeepSeek-V4.1-Flash",
+ "temperature": 0,
+ "max_tokens": 6000,
+ "length_margin": 1.3
+}

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Pull finished Phase-4 prediction files from gpu1080 and judge them (primary judge, locked prompt), every 15 minutes
+# until both reader queues print QUEUE_DONE; then one last pull + primary judge + secondary judge (hypothesis conditions, XQuAD).
+cd /c/Users/PC/Coding/thienthan/THS/VILATENT
+pull() {
+  for pair in "results/icisn_xquad/single:results/icisn/xquad/single" "results/icisn_xquad/long:results/icisn/xquad/long" \
+              "results/icisn_test/single:results/icisn/test_extra/single" "results/icisn_test/long:results/icisn/test_extra/long"; do
+    src=${pair%%:*}; dst=${pair##*:}; mkdir -p $dst
+    for s in $(ssh gpu1080 "cd ~/vilatent_mlqa/$src 2>/dev/null && ls *.summary.json 2>/dev/null"); do
+      stem=${s%.summary.json}
+      [ -f $dst/$stem.jsonl ] && [ -f $dst/$s ] && continue
+      scp -q gpu1080:vilatent_mlqa/$src/$stem.jsonl gpu1080:vilatent_mlqa/$src/$s $dst/
+    done
+  done
+}
+done_q() { ssh gpu1080 'grep -c QUEUE_DONE ~/vilatent_mlqa/logs/icisn_confirm_q0.log ~/vilatent_mlqa/logs/icisn_confirm_q1.log' | awk -F: '{s+=$NF} END{print s}'; }
+while true; do
+  n=$(done_q); pull
+  python -X utf8 scripts/icisn/judge_new.py primary 16 >> results/icisn/judge/judge_new_primary.log 2>&1
+  [ "$n" -ge 2 ] && break
+  sleep 900
+done
+pull
+python -X utf8 scripts/icisn/judge_new.py primary 16 >> results/icisn/judge/judge_new_primary.log 2>&1
+python -X utf8 scripts/icisn/judge_new.py secondary 12 --only-hyp >> results/icisn/judge/judge_new_secondary.log 2>&1
+echo SYNC_JUDGE_DONE >> results/icisn/judge/judge_new_primary.log

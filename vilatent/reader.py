@@ -23,6 +23,36 @@ DTYPES = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch
 QUANTS = ("none", "int4")
 
 
+def _chunked_sdpa_install(chunk: int = 2048) -> None:
+    """Query-chunked scaled_dot_product_attention (identical result, bounded memory).
+
+    Only for GPUs without flash attention (GTX 1080 Ti) on very long contexts; enabled by the
+    environment variable VILATENT_CHUNK_SDPA=1 (scripts/icisn/run_longctx.sh).
+    """
+    import torch.nn.functional as F
+
+    orig = F.scaled_dot_product_attention
+
+    def sdpa(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, **kw):
+        n = q.shape[-2]
+        if n <= chunk:
+            return orig(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, scale=scale, **kw)
+        m = k.shape[-2]
+        outs = []
+        for i in range(0, n, chunk):
+            j = min(n, i + chunk)
+            if is_causal:
+                mm = torch.ones(j - i, m, dtype=torch.bool, device=q.device).tril(diagonal=m - n + i)
+            elif attn_mask is not None:
+                mm = attn_mask[..., i:j, :]
+            else:
+                mm = None
+            outs.append(orig(q[..., i:j, :], k, v, attn_mask=mm, dropout_p=dropout_p, scale=scale, **kw))
+        return torch.cat(outs, dim=-2)
+
+    F.scaled_dot_product_attention = sdpa
+
+
 def load_reader(name: str, device: str = "cuda", dtype: torch.dtype | str = torch.bfloat16,
                 quant: str = "none", return_loading_info: bool = False):
     """Frozen reader in eval mode. With ``return_loading_info`` also returns the missing and
@@ -38,6 +68,9 @@ def load_reader(name: str, device: str = "cuda", dtype: torch.dtype | str = torc
 
         kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                                                            bnb_4bit_compute_dtype=dtype)
+    import os
+    if os.environ.get("VILATENT_CHUNK_SDPA") == "1":
+        _chunked_sdpa_install(int(os.environ.get("VILATENT_SDPA_CHUNK", "2048")))
     tokenizer = AutoTokenizer.from_pretrained(name)
     model, info = AutoModelForCausalLM.from_pretrained(name, dtype=dtype, device_map=device,
                                                        output_loading_info=True, **kwargs)

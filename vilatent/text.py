@@ -76,6 +76,12 @@ def _is_abbreviation(text: str, punct_start: int) -> bool:
 
 
 def split_sentences(text: str) -> list[tuple[int, int]]:
+    """Cached (a context is split again for every question on it; pure function, same spans)."""
+    return list(_split_sentences(text))
+
+
+@lru_cache(maxsize=256)
+def _split_sentences(text: str) -> tuple[tuple[int, int], ...]:
     """Return character spans ``(start, end)`` of the sentences of ``text``.
 
     A period does not end a sentence after a known abbreviation (``TP.``, ``PGS.TS.``,
@@ -95,7 +101,7 @@ def split_sentences(text: str) -> list[tuple[int, int]]:
         _append(spans, text, start, end)
         start = end
     _append(spans, text, start, len(text))
-    return spans
+    return tuple(spans)
 
 
 _NUMBER_WORDS = re.compile(r"\b(một|hai|ba|bốn|tư|năm|sáu|bảy|bẩy|tám|chín|mười|mươi|chục|trăm|nghìn|ngàn|vạn|"

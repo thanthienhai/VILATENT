@@ -38,7 +38,7 @@ from .text import contains_syllables
 # ViWord-C dev or test (6–10% of the answers need more than 32), so an answer that does not
 # end within the limit is almost never a correct one cut short.
 MAX_NEW_TOKENS = {"qa": 128}
-QUERY_AGNOSTIC = {"full", "none", "truncation", "lead", "llmlingua2"}
+QUERY_AGNOSTIC = {"full", "none", "truncation", "lead", "llmlingua2", "sum"}
 NO_BUDGET = {"full", "none"}
 MAX_BATCH_TOKENS = 32_768  # prompt tokens per generation batch (ViQuAD-Long articles reach ~18k tokens)
 
@@ -73,8 +73,9 @@ def _generate_sorted(reader, seqs: list[torch.Tensor], stop_ids: set[int], batch
                      max_new_tokens: int, desc: str, max_batch_tokens: int | None = MAX_BATCH_TOKENS):
     """Greedy generation in batches of similar length; results in the input order."""
     out = [None] * len(seqs)
+    device = reader.get_input_embeddings().weight.device
     for idx in tqdm(length_batches([s.shape[0] for s in seqs], batch_size, max_batch_tokens), desc=desc):
-        for i, g in zip(idx, greedy_generate(reader, [seqs[i] for i in idx], max_new_tokens, stop_ids)):
+        for i, g in zip(idx, greedy_generate(reader, [seqs[i].to(device) for i in idx], max_new_tokens, stop_ids)):
             out[i] = g
     return out
 
@@ -105,14 +106,60 @@ def swap_memories(memory: dict, info: dict, seed: int) -> tuple[dict, dict]:
     return swapped, donors
 
 
+def perturb_memories(memory: dict, mode: str, seed: int = 0) -> dict:
+    """Content controls for the memory vectors (the first and last vector of each memory are kept, as in
+    ``swap_memories``): ``zero`` sets the inner vectors to 0; ``shuffle`` permutes them at random (the
+    same vectors in another order, a permutation drawn per context from ``seed``)."""
+    if mode not in ("zero", "shuffle"):
+        raise ValueError(f"memory mode must be zero or shuffle, not {mode}")
+    rng = random.Random(seed)
+    out = {}
+    for key, m in memory.items():
+        inner = m[1:-1]
+        if mode == "zero":
+            inner = torch.zeros_like(inner)
+        else:
+            order = list(range(inner.shape[0]))
+            rng.shuffle(order)
+            inner = inner[torch.tensor(order, dtype=torch.long)]
+        out[key] = torch.cat([m[:1], inner, m[-1:]])
+    return out
+
+
+class _LazyPrompt:
+    """Reader prompt of one question, built from its (host) memory only when its batch is read.
+    Same tensor as ``model.memory_prompt``; exposes ``shape`` and ``to`` as ``_generate_sorted`` needs."""
+
+    def __init__(self, model, prepared, memory):
+        self.model, self.prepared, self.memory = model, prepared, memory
+        self.shape = (len(prepared.prefix_ids) + memory.shape[0] + len(prepared.evidence_ids) + len(prepared.suffix_ids),)
+
+    def to(self, device):
+        return self.model.memory_prompt(self.prepared, self.memory.to(device))
+
+
+class _LazyIds:
+    """Reader prompt of one question as token ids, embedded only when its batch is read (same tensor as
+    ``embed_ids``; no host or GPU copy of every embedded prompt, ~50 GB for 176 questions of 64k tokens)."""
+
+    def __init__(self, reader, ids):
+        self.reader, self.ids = reader, ids
+        self.shape = (len(ids),)
+
+    def to(self, device):
+        return embed_ids(self.reader, self.ids).to(device)
+
+
 @torch.no_grad()
 def evaluate_vilatent(model: ViLatent, examples: list[Example], ratio: int, factor: int = 1, batch_size: int = 16,
                       method: str = "vilatent", swap_seed: int | None = None,
-                      max_batch_tokens: int | None = MAX_BATCH_TOKENS) -> list[dict]:
+                      max_batch_tokens: int | None = MAX_BATCH_TOKENS, memory_mode: str | None = None,
+                      mode_seed: int = 0) -> list[dict]:
     """Read every question at budget ratio r = ``ratio`` with memory factor f = ``factor``.
     A question-blind memory is written once per distinct context and reused for all its
     questions; Q writes one memory per (context, question). ``swap_seed``: read every question
-    with another context's memory (swap_memories)."""
+    with another context's memory (swap_memories). ``memory_mode``: "zero" or "shuffle" (perturb_memories,
+    ICISN content controls; not with ``swap_seed``)."""
     model.check_pair(ratio, factor)
     model.writer.eval()
     model.reader.eval()
@@ -125,7 +172,7 @@ def evaluate_vilatent(model: ViLatent, examples: list[Example], ratio: int, fact
     for start in tqdm(range(0, len(keys), batch_size), desc="write memory"):
         part = [first[k] for k in keys[start:start + batch_size]]
         for key, m in zip(keys[start:start + batch_size], model.encode_memory(part)):
-            memory[key] = m
+            memory[key] = m.cpu()  # host copy: on very long contexts all memories do not fit on an 11 GB GPU
     donors = {}
     if swap_seed is not None:
         if model.sees_question:
@@ -133,7 +180,13 @@ def evaluate_vilatent(model: ViLatent, examples: list[Example], ratio: int, fact
         info = {k: (p.example.extra.get("title") or p.example.cluster, memory[k].shape[0] - 2)
                 for k, p in first.items()}
         memory, donors = swap_memories(memory, info, swap_seed)
-    seqs = [model.memory_prompt(p, memory[model.memory_key(p)]) for p in prepared]
+    if memory_mode is not None:
+        if swap_seed is not None:
+            raise ValueError("memory_mode and swap_seed are separate controls")
+        if model.sees_question:
+            raise ValueError("ViLatent-Q memory depends on the question: it cannot be perturbed this way")
+        memory = perturb_memories(memory, memory_mode, mode_seed)
+    seqs = [_LazyPrompt(model, p, memory[model.memory_key(p)]) for p in prepared]  # built on the GPU one batch at a time
     gens = _generate_sorted(model.reader, seqs, model.stop_ids, batch_size, MAX_NEW_TOKENS["qa"], method,
                             max_batch_tokens)
     rows = []
@@ -147,7 +200,7 @@ def evaluate_vilatent(model: ViLatent, examples: list[Example], ratio: int, fact
             donor = first[donors[model.memory_key(p)]].example
             extra = {"memory_from": donor.extra.get("title") or donor.cluster}
         else:
-            extra = {}
+            extra = {"memory_mode": memory_mode} if memory_mode else {}
         rows.append(make_row(p.example, method, ratio, p.n_tokens, p.budget, used, raw, clean, g,
                              evidence=p.evidence if factor > 1 else None, factor=factor, pool=p.pool,
                              memory_vectors=k_m, evidence_tokens=len(p.evidence_ids), **extra))
@@ -179,7 +232,7 @@ def evaluate_text(reader, tokenizer, template: ReaderTemplate, baseline, example
         if budget is not None and used > budget:
             raise RuntimeError(f"{method} exceeded the budget on {ex.id}: {used} > {budget}")
         items.append((ex, n_tokens, budget, used, text, template.text_prompt(ex.task, text, ex.question)))
-    seqs = [embed_ids(reader, ids) for *_, ids in items]
+    seqs = [_LazyIds(reader, ids) for *_, ids in items]  # embedded one batch at a time: all questions (GPU or host) do not fit for long articles
     gens = _generate_sorted(reader, seqs, stop_ids, batch_size, MAX_NEW_TOKENS["qa"], method, max_batch_tokens)
     rows = []
     for (ex, n_tokens, budget, used, text, _), g in zip(items, gens):

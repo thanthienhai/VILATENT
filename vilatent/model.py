@@ -84,6 +84,8 @@ class ViLatent:
         tuned for the bm25 baseline, configs/bm25.json); ``pairs``: the (r, f) pairs the writer
         was trained on (saved with the checkpoint; evaluation refuses other pairs)."""
         self.reader, self.tokenizer, self.template, self.writer = reader, tokenizer, template, writer
+        import os
+        max_chunks_per_pass = int(os.environ.get("VILATENT_MAX_CHUNKS", max_chunks_per_pass))  # memory-only knob (long-context runs on 11 GB GPUs)
         self.chunk_tokens, self.max_chunks_per_pass = chunk_tokens, max_chunks_per_pass
         self.sees_question = writer.sees_question
         self.stop_ids = eos_ids(reader, template.eos_id)

@@ -18,6 +18,13 @@ by ``budget.context_budget`` (the number of memory vectors of ViLatent at the sa
   llmlingua2   LLMLingua-2 (xlm-roberta-large), its ``rate`` binary-searched to land in
                [0.97·k, k] reader tokens
   full, none   full context and no context (upper and lower references, no budget)
+
+ICISN additions (November 2026, docs/icisn/CHUAN_BI.md):
+  sum          a question-blind summary written once per document by a larger LLM
+               (scripts/icisn/make_summaries.py), cut at the k-th reader token
+  sumE         the summary replaces the memory of ViLatent-ME: its head fills k(r·f) tokens and the
+               rest of the budget, k(r) − k(r·f), holds the same BM25 sentences as ME
+  bgem3        sentences ranked by the cosine of bge-m3 embeddings (question vs sentence), packed like phobert
 """
 from __future__ import annotations
 
@@ -263,6 +270,101 @@ class LLMLingua2:
         return best
 
 
+def context_key(context: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(context.encode("utf-8")).hexdigest()
+
+
+def load_summaries(path: str | Path) -> dict:
+    """``{sha256(context): summary}`` written by scripts/icisn/make_summaries.py."""
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)["summaries"]
+
+
+class Summary:
+    """Question-blind summary of the document, cut at the budget (reader tokens)."""
+    name = "sum"
+
+    def __init__(self, path: str):
+        self.summaries = load_summaries(path)
+
+    def summary(self, context: str) -> str:
+        try:
+            return self.summaries[context_key(context)]
+        except KeyError:
+            raise KeyError("no summary for this context: run scripts/icisn/make_summaries.py on this data file") from None
+
+    def compress(self, context, question, budget, counter):
+        return fit_head(self.summary(context), budget, counter)
+
+
+class SummaryPlusE(Summary):
+    """The summary takes the place of the memory of ViLatent-ME at memory factor f: its first k(r·f) reader tokens,
+    then the BM25 sentences of ME (same selector, budget k(r) − k(r·f)); total at most k(r). ``set_ratio`` must be
+    called before ``compress`` (the budget alone does not give k(r·f))."""
+    name = "sumE"
+
+    def __init__(self, path: str, bm25: dict, factor: int = 2, chunk_tokens: int = 512):
+        super().__init__(path)
+        self.bm25, self.factor, self.chunk_tokens, self.ratio = BM25Sentences(**bm25), factor, chunk_tokens, None
+
+    def set_ratio(self, ratio: int | None) -> None:
+        self.ratio = ratio
+
+    def compress(self, context, question, budget, counter):
+        from .budget import chunk_context, memory_budget
+
+        lengths = chunk_context(context, counter.tokenizer, self.chunk_tokens, lead=counter.lead).lengths
+        if memory_budget(lengths, self.ratio) != budget:
+            raise RuntimeError("sumE budget differs from k(r): use budget_scale 1 and set_ratio(r)")
+        k_mem = memory_budget(lengths, self.ratio * self.factor)
+        head = fit_head(self.summary(context), k_mem, counter)
+        k_text = budget - k_mem
+        while True:
+            evidence = self.bm25.compress(context, question, k_text, counter)
+            text = " ".join(t for t in (head, evidence) if t)
+            if counter.count(text) <= budget or k_text <= 0:
+                return text
+            k_text -= 1
+
+
+class BGEM3Sentences:
+    """Sentences ranked by cosine(bge-m3 dense embedding of the question, of the sentence); packing as PhoBERT."""
+    name = "bgem3"
+    MODEL = "BAAI/bge-m3"
+
+    def __init__(self, device: str = "cuda", model: str | None = None):
+        import torch
+        from transformers import AutoModel, AutoTokenizer
+
+        self.torch, self.device = torch, device
+        self.tok = AutoTokenizer.from_pretrained(model or self.MODEL)
+        self.model = AutoModel.from_pretrained(model or self.MODEL, torch_dtype=torch.float16 if device != "cpu" else torch.float32)
+        self.model.to(device).eval()
+        self.cache = {}
+
+    def embed(self, texts: list[str], batch: int = 64):
+        torch, out = self.torch, []
+        for i in range(0, len(texts), batch):
+            enc = self.tok(texts[i:i + batch], padding=True, truncation=True, max_length=512, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                h = self.model(**enc).last_hidden_state[:, 0].float()
+            out.append(torch.nn.functional.normalize(h, dim=-1).cpu())
+        return torch.cat(out)
+
+    def compress(self, context, question, budget, counter):
+        sentences = _sentences(context)
+        if not sentences:
+            return ""
+        key = (context, question)
+        if key not in self.cache:
+            if ("S", context) not in self.cache:
+                self.cache[("S", context)] = self.embed(sentences)
+            self.cache[key] = (self.cache[("S", context)] @ self.embed([question])[0]).tolist()
+        return pack_sentences(sentences, self.cache[key], budget, counter, positive_only=False)
+
+
 def build_baseline(name: str, device: str | None = None, bm25: dict | None = None, selector: str | None = None):
     """``bm25``: the tuned ``{"k1", "b", "units"}`` (load_bm25_params), required for the bm25
     baseline; ``selector``: the trained PhoBERT selector directory, required for phobert."""
@@ -281,6 +383,8 @@ def build_baseline(name: str, device: str | None = None, bm25: dict | None = Non
         if selector is None:
             raise ValueError("the phobert baseline needs a trained selector (scripts/train_selector.py)")
         return PhoBERTSentences(selector, device)
+    if name == "bgem3":
+        return BGEM3Sentences(device)
     if name == "llmlingua2":
         return LLMLingua2(device)
     raise ValueError(f"unknown baseline {name!r}")
