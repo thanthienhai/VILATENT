@@ -1,6 +1,6 @@
 """Numbers of PREREG_MORONG (P1, 4x): C1/C2 memory-swap controls with Holm per metric, zero/shuffle controls, equivalence margins
 for L1/L2, ME vs full/bm25_x2. Files only; no GPU, no API. Missing conditions or missing judge labels are skipped (partial run ok).
-Inputs: results/icisn_longctx/p1 (intact), results/icisn_morong/p1 (controls), results/icisn_morong_t4/p1 (full, bm25_x2 merged),
+Inputs: results/icisn_longctx/p1 (intact), results/icisn_morong/p1 (ME controls, 1080 Ti fp16), results/icisn_h100/p1 (full, bm25_x2) and results/icisn_h100_memctl/p1 (M intact/swap/zero/shuf), H100 bf16,
 results/icisn/longctx/judge/p1 and results/icisn/morong/judge/* (ACC-LLM). Output: results/icisn/morong/numbers.json"""
 import json, sys
 from pathlib import Path
@@ -16,8 +16,11 @@ SRC = {  # name -> (rows dir, judge dir, stem)
     "bm25": ("icisn_longctx/p1", "icisn/longctx/judge/p1", "bm25_r4"),
     **{f"{b}_{k}": ("icisn_morong/p1", "icisn/morong/judge/icisn_morong", f"vilatent_{n}_{k}_r4")
        for b, n in (("m", "m"), ("me", "me_f2")) for k in ("swap", "zero", "shuf")},
-    "full": ("icisn_morong_t4/p1", "icisn/morong/judge/icisn_morong_t4", "full"),
-    "bm25x2": ("icisn_morong_t4/p1", "icisn/morong/judge/icisn_morong_t4", "bm25_x2_r4"),
+    "full": ("icisn_h100/p1", "icisn/morong/judge/icisn_h100", "full"),
+    "bm25x2": ("icisn_h100/p1", "icisn/morong/judge/icisn_h100", "bm25_x2_r4"),
+    # lượt H100 bf16 (errata mục 5): cặp cùng phần cứng cho C1; zero/shuf thứ yếu
+    "m_h": ("icisn_h100_memctl/p1", "icisn/morong/judge/icisn_h100_memctl", "vilatent_m_r4"),
+    **{f"m_h_{k}": ("icisn_h100_memctl/p1", "icisn/morong/judge/icisn_h100_memctl", f"vilatent_m_{k}_r4") for k in ("swap", "zero", "shuf")},
 }
 
 
@@ -48,26 +51,26 @@ def main():
     out["C"] = {}
     for m in ("f1", "acc"):
         t = {}
-        for name, a, b in (("C1 M-swap", "m", "m_swap"), ("C2 ME-swap", "me", "me_swap")):
+        for name, a, b in (("C1 M-swap (H100 bf16 pair)", "m_h", "m_h_swap"), ("C2 ME-swap", "me", "me_swap")):
             if a in cond and b in cond and m in metrics(a) and m in metrics(b): t[name] = pt(a, b, ids, m)
         if t:
             adj = holm({k: v["p_one_sided"] for k, v in t.items()})
             for k in t: t[k]["p_holm"] = adj[k]
             out["C"][m] = t
     sub_np = [i for i in ids if i not in peeked]
-    out["C_excl_peeked"] = {m: {name: pt(a, b, sub_np, m) for name, a, b in (("C1 M-swap", "m", "m_swap"), ("C2 ME-swap", "me", "me_swap"))
+    out["C_excl_peeked"] = {m: {name: pt(a, b, sub_np, m) for name, a, b in (("C1 M-swap (H100 bf16 pair)", "m_h", "m_h_swap"), ("C2 ME-swap", "me", "me_swap"))
                                 if a in cond and b in cond and m in metrics(a) and m in metrics(b)} for m in ("f1", "acc")}
-    out["secondary"] = {m: {f"{b}-{k}": pt(b, f"{b}_{k}", ids, m) for b in ("m", "me") for k in ("zero", "shuf", "swap")
+    out["secondary"] = {m: {f"{b}-{k}": pt(b, f"{b}_{k}", ids, m) for b in ("m", "m_h", "me") for k in ("zero", "shuf", "swap")
                             if f"{b}_{k}" in cond and m in metrics(b) and m in metrics(f"{b}_{k}")} for m in ("f1", "acc")}
     out["by_length"] = {}
-    for name, a, b in (("C1 M-swap", "m", "m_swap"), ("C2 ME-swap", "me", "me_swap"), ("ME-full", "me", "full"), ("ME-bm25x2", "me", "bm25x2")):
+    for name, a, b in (("C1 M-swap (H100 bf16 pair)", "m_h", "m_h_swap"), ("C2 ME-swap", "me", "me_swap"), ("ME-full", "me", "full"), ("ME-bm25x2", "me", "bm25x2")):
         if a in cond and b in cond:
             out["by_length"][name] = {}
             for L in (16000, 32000, 64000):
                 sub = [i for i in ids if meta[i]["length"] == L]
                 out["by_length"][name][str(L)] = {m: pt(a, b, sub, m) for m in ("f1", "acc") if m in metrics(a) and m in metrics(b)} | {"n": len(sub)}
     out["by_position"] = {}
-    for name, a, b in (("C1 M-swap", "m", "m_swap"), ("C2 ME-swap", "me", "me_swap")):
+    for name, a, b in (("C1 M-swap (H100 bf16 pair)", "m_h", "m_h_swap"), ("C2 ME-swap", "me", "me_swap")):
         if a in cond and b in cond:
             out["by_position"][name] = {}
             for pos in ("start", "middle", "end"):

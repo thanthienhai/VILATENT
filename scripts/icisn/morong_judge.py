@@ -1,5 +1,5 @@
 """Primary-judge labels (ACC-LLM) for the PREREG_MORONG conditions on P1: results/icisn_morong/p1/*.jsonl (1080 Ti controls) and
-results/icisn_morong_t4/p1/*.jsonl (T4: full, bm25_x2, merged shards). Resumable (sqlite cache, shared with the longctx judge).
+results/icisn_h100/p1 (H100 bf16: full, bm25_x2), results/icisn_h100_memctl/p1 (H100 bf16: M intact/swap/zero/shuf); the T4 shards were lost. Resumable (sqlite cache, shared with the longctx judge).
 Output: results/icisn/morong/judge/<dir>/<stem>.jsonl with id, acc_llm, src."""
 import json, sys, time
 from pathlib import Path
@@ -14,7 +14,7 @@ for s in ("p1",):
         a = r["answers"]
         QA[(s, r["id"])] = (r["question"], judge.uniq(a if isinstance(a, list) else a["text"]))
 cache = llm.Cache(ROOT / "results/icisn/longctx/judge_cache_primary.sqlite")
-files = sorted(p for d in ("icisn_morong/p1", "icisn_morong_t4/p1") for p in (ROOT / "results" / d).glob("*.jsonl"))
+files = sorted(p for d in ("icisn_morong/p1", "icisn_h100/p1", "icisn_h100_memctl/p1", "icisn_morong_t4/p1") for p in (ROOT / "results" / d).glob("*.jsonl"))
 need = {}
 for p in files:
     s = "p1"
