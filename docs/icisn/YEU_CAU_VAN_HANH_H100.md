@@ -25,19 +25,26 @@ Hai ô phải chạy cùng H100 bf16 để hiệu số không lẫn hiệu ứng
 
 | Mục | Yêu cầu | Cơ sở |
 | --- | --- | --- |
-| GPU | 1–2× H100 80 GB, một tiến trình mỗi GPU | 2 job chính |
-| **RAM máy chủ** | **≥ 128 GiB nếu chạy hai GPU song song; ≥ 64 GiB nếu chạy một GPU** | một tiến trình M tăng đến ≈ 26 GB ở 55% bước ghi bộ nhớ, ngoại suy đỉnh 45–50 GB (đo trên máy 1080 Ti, chưa đo trên H100); hai tiến trình M từng bị hệ điều hành giết vì hết RAM trên máy 62 GB |
-| CPU | ≥ 8 lõi | |
+| GPU | 1–2× H100 80 GB | 2 job chính |
+| **RAM của pod** | **Khuyến nghị `requests`/`limits` memory = 256Gi** (lượt 1 dùng 128Gi). Dưới 200 GiB, script tự chạy hai job **tuần tự trên một GPU** để không bị giết; vẫn đủ kết quả, chỉ lâu gấp đôi | một tiến trình M tăng đến ≈ 26 GB ở 55% bước ghi bộ nhớ, ngoại suy đỉnh 45–50 GB (đo trên máy 1080 Ti, chưa đo trên H100); hai tiến trình M từng bị hệ điều hành giết vì hết RAM trên máy 62 GB. `dshm` 16 GiB tính vào giới hạn RAM của pod |
+| CPU | ≥ 8 lõi (lượt 1 dùng 16) | |
 | Đĩa | ≥ 20 GiB (model ≈ 4–5 GB, checkpoint 0,9 GB, dữ liệu 105 MB) | |
-| Thời gian | **chưa có số đo.** Bước chuẩn bị ngữ cảnh nay chỉ vài phút sau bản vá; lượt 1 hai job mất ≈ 14 phút. Tạm ước ≈ 0,5–1 giờ mỗi job; ≈ 1–2 GPU-giờ cho hai job chính | cần bước thử §5 |
+| Thời gian | **chưa có số đo.** Bước chuẩn bị ngữ cảnh nay chỉ vài phút sau bản vá; lượt 1 hai job mất ≈ 14 phút. Tạm ước ≈ 0,5–1 giờ mỗi job; **không đặt giới hạn thời gian cứng (`activeDeadlineSeconds`) dưới 6 giờ** | cần bước thử §4 |
 
-Nếu `free -g` cho thấy RAM < 128 GiB: chạy `GPUS="0"` (hai job tuần tự trên một GPU) để tránh bị giết.
+## Bảo đảm chạy đủ (đã tích hợp trong `run_h100.sh`)
+
+- Tự kiểm SHA-256 của `longctx_p1.jsonl` trước khi chạy thật; sai thì dừng (exit 4), không tính kết quả.
+- Nếu RAM dùng được (cgroup) < 200 GiB và có hai GPU: tự chạy tuần tự trên GPU đầu. `FORCE_PARALLEL=1` để bỏ qua (không khuyến nghị).
+- Sau khi chạy xong, tự kiểm đủ ô và đủ `n`; ô thiếu hoặc bị giết thì **tự thử lại tối đa 2 lần** (ô đã xong được giữ nguyên).
+- Cuối cùng in đúng một trong hai dòng: `RESULT_COMPLETE set=memctl n=533 ...` (exit 0) hoặc `RESULT_INCOMPLETE ... thiếu: <tên ô>` (exit 1). **Chỉ khi thấy `RESULT_COMPLETE` mới được đóng gói và báo xong.** Nếu thấy `RESULT_INCOMPLETE`: giữ nguyên log, báo lại, **không đổi cờ**.
+- Có thể chạy lại cùng lệnh bất cứ lúc nào sau gián đoạn: hàng đợi tự khởi tạo lại, ô đã xong được bỏ qua.
+- Tự ghi RSS đỉnh vào `logs/h100/rss_memctl.log` (15 giây một lần).
 
 ## 3. Chuẩn bị
 
 ```bash
 cd VILATENT
-git fetch --tags origin && git checkout main && git pull --ff-only && git rev-parse HEAD   # báo lại commit
+git fetch --tags origin && git checkout <COMMIT> && git rev-parse HEAD   # <COMMIT> do chủ đề tài báo; trước đó phải là `main`. Script khởi tạo của lượt 1 ghim `icisn-h100-v1` và vá bằng `git apply`: BỎ cả hai (bản vá đã nằm trong main)
 python -c "from huggingface_hub import snapshot_download as d; d('thanthienhai/vilatent-data',repo_type='dataset',allow_patterns=['data/icisn/longctx_p1.jsonl','runs/paper/stage2_mem/*'],local_dir='.')"
 sha256sum data/icisn/longctx_p1.jsonl runs/paper/stage2_mem/best.pt
 ls configs/readers/qwen3.5-2b.json configs/bm25.json runs/paper/stage2_mem/config.json
@@ -53,35 +60,34 @@ Không khớp SHA thì dừng và báo. Dữ liệu đã được dùng ở lư�
 
 ## 4. Thử nhanh (bắt buộc, 1 GPU)
 
+Tập thử gồm 12 câu, 3 bài, đủ ngữ cảnh 16k/32k/64k (có câu tới ≈ 75k token), nên kiểm được đường 64k và phép hoán đổi bộ nhớ giữa các bài (cần ≥ 2 bài). Không dùng `LIMIT=12` (12 câu đầu cùng một bài, phép swap không có ý nghĩa).
+
 ```bash
-SET=memctl GPUS="0" LIMIT=12 OUT=results/icisn_h100_smoke_memctl/p1 bash scripts/icisn/run_h100.sh 2>&1 | tee logs/h100_smoke_memctl.log
+python scripts/icisn/make_smoke_p1.py          # tạo data/icisn/longctx_p1_smoke.jsonl; SHA-256 phải là 0a0ac70d5b630db3cccc0a0b2e9ddd3c742b34cf27fceb9a05c24ff8703d15de
+SET=memctl GPUS="0" DATA=data/icisn/longctx_p1_smoke.jsonl OUT=results/icisn_h100_smoke_memctl/p1   bash scripts/icisn/run_h100.sh 2>&1 | tee logs/h100_smoke_memctl.log
 ```
 
-Qua khi cả hai job `rc=0`, không có `OutOfMemory`/`Traceback`/`Killed`, có `vilatent_m_swap_r4.summary.json` và `vilatent_m_r4.summary.json`. **Gửi lại**: log, thời gian từng job, **RSS đỉnh của tiến trình Python** (ví dụ `/usr/bin/time -v` hoặc theo dõi `ps -o rss`) và `nvidia-smi` đỉnh VRAM. Kết quả thử không dùng làm số liệu. Chủ đề tài chốt lệnh chạy thật sau khi nhận số thử; **không tự chạy thật trước.**
+Qua khi in `RESULT_COMPLETE set=memctl n=12`. **Gửi lại**: log, thời gian từng job, `logs/h100/rss_memctl.log` (RSS đỉnh), `nvidia-smi` đỉnh VRAM và `free -g`. Kết quả thử không dùng làm số liệu. Chủ đề tài chốt lệnh chạy thật sau khi nhận số thử; **không tự chạy thật trước.**
 
 ## 5. Chạy thật (sau khi được duyệt)
 
 ```bash
-SET=memctl GPUS="0 1" bash scripts/icisn/run_h100.sh 2>&1 | tee logs/h100_memctl_main.log     # hoặc GPUS="0" nếu RAM < 128 GiB
+SET=memctl GPUS="0 1" bash scripts/icisn/run_h100.sh 2>&1 | tee logs/h100_memctl_main.log
 # MORE=1 thêm m_zero, m_shuf (chỉ nếu chủ đề tài yêu cầu)
 ```
 
-Gián đoạn: `rm -rf logs/h100/claim_memctl` rồi chạy lại; ô đã xong được bỏ qua. Nếu một tiến trình bị giết vì RAM, **không đổi cờ**, chạy lại bằng `GPUS="0"` và báo.
+Dòng cuối phải là `RESULT_COMPLETE set=memctl n=533`. Nếu bị gián đoạn (pod bị đuổi, mất kết nối): chạy lại cùng lệnh. Nếu một tiến trình bị giết vì RAM, **không đổi cờ**; script tự thử lại trên một GPU.
 
 ## 6. Kiểm đủ ô
 
+Đã nằm trong script (`RESULT_COMPLETE`). Kiểm tay thêm cho chắc:
+
 ```bash
-python - <<'PY'
-import os, json
-need = ["vilatent_m_swap_r4", "vilatent_m_r4"]
-d = "results/icisn_h100_memctl/p1"
-miss = [n for n in need if not os.path.exists(f"{d}/{n}.summary.json")]
-bad = [n for n in need if n not in miss and json.load(open(f"{d}/{n}.summary.json"))["n"] != 533]
-print("THIẾU:", miss or "không", "| SAI n:", bad or "không")
-PY
+ls -l results/icisn_h100_memctl/p1/vilatent_m_swap_r4.summary.json results/icisn_h100_memctl/p1/vilatent_m_r4.summary.json
+grep -h '"n"' results/icisn_h100_memctl/p1/*.summary.json     # cả hai phải là 533
 ```
 
-Phải in `THIẾU: không | SAI n: không`. Với `MORE=1` thêm `vilatent_m_zero_r4`, `vilatent_m_shuf_r4`.
+Với `MORE=1` thêm `vilatent_m_zero_r4`, `vilatent_m_shuf_r4`.
 
 ## 7. Gửi lại
 
