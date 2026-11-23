@@ -68,10 +68,14 @@ def query_words(question: str) -> list[str]:
 
 
 def _is_abbreviation(text: str, punct_start: int) -> bool:
-    match = _PREV_TOKEN.search(text[:punct_start + 1])
-    if not match:
+    # Same result as _PREV_TOKEN.search(text[:punct_start + 1]) (\s == str.isspace), but walks back from
+    # the period instead of re-scanning the whole prefix: O(token) instead of O(len(text)) per period.
+    if text[punct_start].isspace():
         return False
-    token = match.group(1).lower().rstrip(".")
+    i = punct_start
+    while i > 0 and not text[i - 1].isspace():
+        i -= 1
+    token = text[i:punct_start + 1].lower().rstrip(".")
     return token in ABBREVIATIONS or (len(token) == 1 and token.isalpha())
 
 
