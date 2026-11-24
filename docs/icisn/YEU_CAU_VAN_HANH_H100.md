@@ -1,6 +1,6 @@
 # Nhờ đội vận hành GPU: lượt 2 trên H100 — phép kiểm soát nội dung bộ nhớ của ViLatent-M (`m_swap`, `m_intact`)
 
-Bản 3, soạn 2026-11-23. Lượt 1 (`full`, `bm25_x2`, SET=text) đã xong, kết quả ở `thanthienhai/vilatent-results/icisn_h100_main_20261123/`. Tài liệu này chỉ nói về lượt 2.
+Bản 3, soạn 2026-11-23. Lượt 1 (`full`, `bm25_x2`, SET=text) đã xong, kết quả ở `thanthienhai/vilatent-results/icisn_h100_main_20261123/`. Tài liệu này chỉ nói về lượt 2. Bản gửi đi, kèm cách sửa script khởi tạo: `docs/icisn/GUI_VAN_HANH_H100_LUOT2.md`.
 Đây là phần suy luận, **không huấn luyện**. Phạm vi đăng ký: `docs/icisn/PREREG_MORONG.md` (SHA-256 `6b27983487a6a43d9acf42d38abc237c607d775651bfc2646f7615849e5cef0b`) và `PREREG_MORONG_ERRATA.md` mục 5.
 Đội vận hành chỉ cần chạy, kiểm đủ ô, gửi tệp; chấm bằng API và phân tích do chủ đề tài làm ở máy riêng.
 
@@ -17,7 +17,7 @@ Hai ô phải chạy cùng H100 bf16 để hiệu số không lẫn hiệu ứng
 
 ## 1. Không được làm
 
-- Không đổi mã, cờ, dữ liệu hay checkpoint. Máy ở đúng `main` mới nhất (đã gộp bản vá tốc độ `f6f6424`); `git status --short` sạch (trừ `logs/`, `results/`, `runs/`, `data/`).
+- Không đổi mã, cờ, dữ liệu hay checkpoint. Máy ở đúng tag `icisn-h100-v2` (đã gồm bản vá tốc độ `f6f6424`); `git status --short` sạch (trừ `logs/`, `results/`, `runs/`, `data/`).
 - Không huấn luyện, không chạy P2/P3, không chạy điều kiện khác ngoài bốn job trên, không đặt `VILATENT_CHUNK_SDPA`.
 - Không đẩy dữ liệu hay checkpoint ra ngoài `thanthienhai/*` trên Hub.
 
@@ -44,7 +44,7 @@ Hai ô phải chạy cùng H100 bf16 để hiệu số không lẫn hiệu ứng
 
 ```bash
 cd VILATENT
-git fetch --tags origin && git checkout <COMMIT> && git rev-parse HEAD   # <COMMIT> do chủ đề tài báo; trước đó phải là `main`. Script khởi tạo của lượt 1 ghim `icisn-h100-v1` và vá bằng `git apply`: BỎ cả hai (bản vá đã nằm trong main)
+git fetch --tags origin && git checkout icisn-h100-v2 && git rev-parse HEAD   # Script khởi tạo của lượt 1 ghim `icisn-h100-v1` và vá bằng `git apply`: BỎ cả hai (bản vá đã nằm trong mã)
 python -c "from huggingface_hub import snapshot_download as d; d('thanthienhai/vilatent-data',repo_type='dataset',allow_patterns=['data/icisn/longctx_p1.jsonl','runs/paper/stage2_mem/*'],local_dir='.')"
 sha256sum data/icisn/longctx_p1.jsonl runs/paper/stage2_mem/best.pt
 ls configs/readers/qwen3.5-2b.json configs/bm25.json runs/paper/stage2_mem/config.json
